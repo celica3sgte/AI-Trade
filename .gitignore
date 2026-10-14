@@ -1,0 +1,13 @@
+CosmoApp/appsettings.Development.json
+CosmoApp/appsettings.json
+AI-Order/AI-Order.Api/appsettings.json
+AI-Order/AI-Order.Management/appsettings.json
+
+# .NET build output / IDE
+[Bb]in/
+[Oo]bj/
+.vs/
+*.user
+
+# Local SQLite dev database
+AITrade/Data/app.db*
