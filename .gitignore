@@ -8,6 +8,3 @@ AI-Order/AI-Order.Management/appsettings.json
 [Oo]bj/
 .vs/
 *.user
-
-# Local SQLite dev database
-AITrade/Data/app.db*
