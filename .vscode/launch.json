@@ -5,6 +5,14 @@
     "version": "0.2.0",
     "configurations": [
         {
+            // C# Dev Kit: builds and debugs the project using its launchSettings.json profile.
+            "type": "dotnet",
+            "request": "launch",
+            "name": "AITrade (https)",
+            "projectPath": "${workspaceFolder}/AITrade/AITrade.csproj",
+            "launchConfigurationId": "TargetFramework=;https"
+        },
+        {
             "type": "chrome",
             "request": "launch",
             "name": "Launch Chrome against localhost",

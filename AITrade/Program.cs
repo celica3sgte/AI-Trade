@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using AITrade.Components;
 using AITrade.Components.Account;
 using AITrade.Data;
+using AITrade.Market;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -23,8 +24,14 @@ builder.Services.AddAuthentication(options =>
     .AddIdentityCookies();
 
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection") ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
-builder.Services.AddDbContext<ApplicationDbContext>(options =>
+// The factory is for Blazor components/services; it also registers ApplicationDbContext as scoped for Identity.
+builder.Services.AddDbContextFactory<ApplicationDbContext>(options =>
     options.UseSqlServer(connectionString));
+builder.Services.AddScoped<WatchlistService>();
+
+builder.Services.Configure<AlpacaOptions>(builder.Configuration.GetSection(AlpacaOptions.SectionName));
+builder.Services.AddHttpClient<AlpacaClient>(client => client.Timeout = TimeSpan.FromSeconds(30));
+builder.Services.AddScoped<PriceDataService>();
 builder.Services.AddDatabaseDeveloperPageExceptionFilter();
 
 builder.Services.AddIdentityCore<ApplicationUser>(options =>

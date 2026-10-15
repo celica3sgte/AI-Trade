@@ -27,6 +27,12 @@ main {
         text-decoration: none;
     }
 
+    /* Logout button sits inside a form; match the spacing and size of the links. */
+    .top-row ::deep form .btn-link {
+        font-size: inherit;
+        vertical-align: baseline;
+    }
+
     .top-row ::deep a:hover, .top-row ::deep .btn-link:hover {
         text-decoration: underline;
     }

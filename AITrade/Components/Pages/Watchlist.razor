@@ -1,0 +1,360 @@
+@page "/watchlist"
+@rendermode InteractiveServer
+
+@using System.ComponentModel.DataAnnotations
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Authorization
+@using AITrade.Data
+@using AITrade.Market
+
+@attribute [Authorize]
+
+@inject WatchlistService WatchlistService
+@inject PriceDataService PriceDataService
+@inject ILogger<Watchlist> Logger
+
+<PageTitle>Watchlist</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="mb-0">Watchlist</h1>
+    <button class="btn btn-outline-primary" disabled="@(busy || items is not { Count: > 0 })" @onclick="RefreshPricesAsync">
+        @(refreshing ? "Refreshing..." : "Refresh prices")
+    </button>
+</div>
+
+<EditForm Model="Input" OnValidSubmit="AddAsync" FormName="add-watchlist" class="row g-2 align-items-start mb-4">
+    <DataAnnotationsValidator />
+    <div class="col-sm-2">
+        <InputText @bind-Value="Input.Symbol" class="form-control" placeholder="Symbol (e.g. MSFT)" aria-label="Symbol" />
+        <ValidationMessage For="() => Input.Symbol" class="text-danger" />
+    </div>
+    <div class="col-sm-2">
+        <InputNumber @bind-Value="Input.SharesOwned" class="form-control" min="0" step="any" placeholder="Shares owned" aria-label="Shares owned" title="Shares owned (0 if you don't own it)" />
+        <ValidationMessage For="() => Input.SharesOwned" class="text-danger" />
+    </div>
+    <div class="col-sm-2">
+        <InputNumber @bind-Value="Input.AverageCostPerShare" class="form-control" min="0" step="any" placeholder="Avg cost / share" aria-label="Average cost per share" title="Average price paid per share in USD (only used if you own shares)" />
+        <ValidationMessage For="() => Input.AverageCostPerShare" class="text-danger" />
+    </div>
+    <div class="col-sm-4">
+        <InputText @bind-Value="Input.Notes" class="form-control" placeholder="Notes (optional)" aria-label="Notes" />
+        <ValidationMessage For="() => Input.Notes" class="text-danger" />
+    </div>
+    <div class="col-sm-auto">
+        <button type="submit" class="btn btn-primary" disabled="@busy">Add</button>
+    </div>
+</EditForm>
+
+@if (message is not null)
+{
+    <div class="alert alert-warning" role="alert">@message</div>
+}
+
+@if (items is null)
+{
+    <p><em>Loading...</em></p>
+}
+else if (items.Count == 0)
+{
+    <p>Your watchlist is empty. Add a stock symbol above to start tracking it.</p>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table align-middle">
+            <thead>
+                <tr>
+                    <th>Symbol</th>
+                    <th class="text-end">Last close</th>
+                    <th class="text-end">Day change</th>
+                    <th class="text-end">Shares</th>
+                    <th class="text-end">Avg cost / share</th>
+                    <th class="text-end">Total cost</th>
+                    <th class="text-end">Market value</th>
+                    <th class="text-end">Gain / loss</th>
+                    <th>Notes</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var item in items)
+                {
+                    var price = prices.GetValueOrDefault(item.Symbol);
+                    var marketValue = item.IsOwned && price is not null ? item.SharesOwned * price.Close : (decimal?)null;
+                    var gain = marketValue is decimal mv && item.TotalCost is decimal tc ? mv - tc : (decimal?)null;
+                    var gainPercent = gain is decimal g && item.TotalCost is decimal cost && cost != 0 ? g / cost : (decimal?)null;
+
+                    <tr>
+                        <td title="Added @item.AddedAtUtc.ToLocalTime().ToString("d")">
+                            <strong>@item.Symbol</strong>
+                            @if (item.CompanyName is not null)
+                            {
+                                <div class="small text-muted">@item.CompanyName</div>
+                            }
+                        </td>
+                        <td class="text-end">
+                            @if (price is not null)
+                            {
+                                @FormatMoney(price.Close)
+                                <div class="small text-muted">@price.Date.ToString("d")</div>
+                            }
+                            else
+                            {
+                                <span class="text-muted">No data</span>
+                            }
+                        </td>
+                        <td class="text-end @SignClass(price?.Change)">
+                            @FormatChange(price?.Change, price?.ChangePercent)
+                        </td>
+
+                        @if (editingId == item.Id)
+                        {
+                            <td>
+                                <input type="number" class="form-control form-control-sm ms-auto" style="max-width: 8rem;" min="0" step="any" aria-label="Shares owned" @bind="editShares" />
+                            </td>
+                            <td>
+                                <input type="number" class="form-control form-control-sm ms-auto" style="max-width: 8rem;" min="0" step="any" aria-label="Average cost per share" @bind="editCost" />
+                            </td>
+                            <td></td>
+                            <td></td>
+                            <td></td>
+                            <td>@item.Notes</td>
+                            <td class="text-end text-nowrap">
+                                <button class="btn btn-sm btn-primary" disabled="@busy" @onclick="() => SaveHoldingAsync(item)">Save</button>
+                                <button class="btn btn-sm btn-outline-secondary" disabled="@busy" @onclick="CancelEdit">Cancel</button>
+                            </td>
+                        }
+                        else
+                        {
+                            <td class="text-end">
+                                @if (item.IsOwned)
+                                {
+                                    @item.SharesOwned.ToString("#,##0.######")
+                                }
+                                else
+                                {
+                                    <span class="text-muted">Not owned</span>
+                                }
+                            </td>
+                            <td class="text-end">@FormatMoney(item.AverageCostPerShare)</td>
+                            <td class="text-end">@FormatMoney(item.TotalCost)</td>
+                            <td class="text-end">@FormatMoney(marketValue)</td>
+                            <td class="text-end @SignClass(gain)">@FormatChange(gain, gainPercent)</td>
+                            <td>@item.Notes</td>
+                            <td class="text-end text-nowrap">
+                                <button class="btn btn-sm btn-outline-secondary" disabled="@busy" @onclick="() => StartEdit(item)">Edit</button>
+                                <button class="btn btn-sm btn-outline-danger" disabled="@busy" @onclick="() => RemoveAsync(item)">Remove</button>
+                            </td>
+                        }
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+    <p class="small text-muted">
+        Prices are daily closes from Alpaca, adjusted for splits and dividends, and are at least 15 minutes delayed.
+        During market hours the latest value is the day's price so far.
+    </p>
+}
+
+@code {
+    private const decimal MaxShares = 1_000_000_000m;
+    private const decimal MaxCost = 10_000_000m;
+
+    [CascadingParameter]
+    private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private InputModel Input { get; set; } = new();
+    private List<WatchlistItem>? items;
+    private Dictionary<string, PriceSummary> prices = new(StringComparer.OrdinalIgnoreCase);
+    private string userId = default!;
+    private string? message;
+    private bool busy;
+    private bool refreshing;
+    private int? editingId;
+    private decimal? editShares;
+    private decimal? editCost;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = (await AuthState).User;
+        userId = user.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? throw new InvalidOperationException("Signed-in user has no identifier claim.");
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        items = await WatchlistService.GetForUserAsync(userId);
+        prices = await PriceDataService.GetLatestAsync(items.Select(i => i.Symbol));
+    }
+
+    private async Task AddAsync()
+    {
+        busy = true;
+        message = null;
+        try
+        {
+            AddWatchlistOutcome outcome;
+            try
+            {
+                outcome = await WatchlistService.AddAsync(userId, Input.Symbol, Input.Notes, Input.SharesOwned ?? 0, Input.AverageCostPerShare);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Symbol lookup failed for {Symbol}", Input.Symbol);
+                message = $"Couldn't verify the symbol with Alpaca: {ex.Message}";
+                return;
+            }
+
+            switch (outcome.Result)
+            {
+                case AddWatchlistResult.AlreadyExists:
+                    message = $"{outcome.Symbol} is already on your watchlist.";
+                    return;
+                case AddWatchlistResult.NotFound:
+                    message = $"{outcome.Symbol} wasn't found. Check the symbol and try again.";
+                    return;
+                case AddWatchlistResult.NotTradable:
+                    message = $"{outcome.Symbol} isn't an active, tradable US stock.";
+                    return;
+            }
+
+            Input = new();
+            try
+            {
+                await PriceDataService.RefreshAsync([outcome.Symbol]);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Price download failed for {Symbol}", outcome.Symbol);
+                message = $"{outcome.Symbol} was added, but its prices couldn't be downloaded: {ex.Message}";
+            }
+            await LoadAsync();
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private async Task RefreshPricesAsync()
+    {
+        if (items is not { Count: > 0 })
+        {
+            return;
+        }
+
+        busy = refreshing = true;
+        message = null;
+        try
+        {
+            await PriceDataService.RefreshAsync(items.Select(i => i.Symbol));
+            prices = await PriceDataService.GetLatestAsync(items.Select(i => i.Symbol));
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Manual price refresh failed");
+            message = $"Couldn't refresh prices: {ex.Message}";
+        }
+        finally
+        {
+            busy = refreshing = false;
+        }
+    }
+
+    private void StartEdit(WatchlistItem item)
+    {
+        message = null;
+        editingId = item.Id;
+        editShares = item.SharesOwned;
+        editCost = item.AverageCostPerShare;
+    }
+
+    private void CancelEdit() => editingId = null;
+
+    private async Task SaveHoldingAsync(WatchlistItem item)
+    {
+        if (editShares is null or < 0 or > MaxShares)
+        {
+            message = "Shares owned must be between 0 and 1,000,000,000.";
+            return;
+        }
+
+        if (editCost is < 0 or > MaxCost)
+        {
+            message = "Average cost per share must be between 0 and 10,000,000.";
+            return;
+        }
+
+        busy = true;
+        message = null;
+        try
+        {
+            await WatchlistService.UpdateHoldingAsync(userId, item.Id, editShares.Value, editCost);
+            editingId = null;
+            items = await WatchlistService.GetForUserAsync(userId);
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private async Task RemoveAsync(WatchlistItem item)
+    {
+        busy = true;
+        message = null;
+        try
+        {
+            await WatchlistService.RemoveAsync(userId, item.Id);
+            items = await WatchlistService.GetForUserAsync(userId);
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    // Alpaca market data is US equities, so amounts are shown in USD.
+    private static string FormatMoney(decimal? value) =>
+        value is decimal v ? v.ToString("$#,##0.00##") : "";
+
+    private static string FormatChange(decimal? amount, decimal? percent)
+    {
+        if (amount is not decimal a)
+        {
+            return "";
+        }
+
+        var sign = a > 0 ? "+" : a < 0 ? "-" : "";
+        var text = $"{sign}{Math.Abs(a):$#,##0.00}";
+        return percent is decimal p ? $"{text} ({sign}{Math.Abs(p):0.00%})" : text;
+    }
+
+    private static string SignClass(decimal? value) => value switch
+    {
+        > 0 => "text-success",
+        < 0 => "text-danger",
+        _ => ""
+    };
+
+    private sealed class InputModel
+    {
+        // Letters with an optional class suffix, e.g. MSFT, BRK.B. Case is normalized on save.
+        [Required(ErrorMessage = "Enter a stock symbol.")]
+        [RegularExpression(@"^\s*[A-Za-z]{1,5}([.\-][A-Za-z]{1,2})?\s*$", ErrorMessage = "Enter a valid symbol, e.g. MSFT or BRK.B.")]
+        public string Symbol { get; set; } = "";
+
+        // Blank is treated as 0 (watching, not owned).
+        [Range(typeof(decimal), "0", "1000000000", ErrorMessage = "Shares owned must be between 0 and 1,000,000,000.")]
+        public decimal? SharesOwned { get; set; }
+
+        // Ignored when SharesOwned is 0.
+        [Range(typeof(decimal), "0", "10000000", ErrorMessage = "Average cost per share must be between 0 and 10,000,000.")]
+        public decimal? AverageCostPerShare { get; set; }
+
+        [MaxLength(500)]
+        public string? Notes { get; set; }
+    }
+}
