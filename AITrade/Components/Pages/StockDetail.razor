@@ -1,0 +1,260 @@
+@page "/watchlist/{Symbol}"
+@rendermode InteractiveServer
+
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Authorization
+@using AITrade.Data
+@using AITrade.Market
+
+@attribute [Authorize]
+@implements IAsyncDisposable
+
+@inject PriceDataService PriceDataService
+@inject WatchlistService WatchlistService
+@inject IJSRuntime JS
+@inject ILogger<StockDetail> Logger
+
+<PageTitle>@normalizedSymbol</PageTitle>
+
+<p class="mb-2"><a href="watchlist">&larr; Watchlist</a></p>
+
+<div class="d-flex flex-wrap justify-content-between align-items-end gap-2 mb-3">
+    <div>
+        <h1 class="mb-0">@normalizedSymbol</h1>
+        @if (companyName is not null)
+        {
+            <div class="text-muted">@companyName</div>
+        }
+    </div>
+    @if (latest is not null)
+    {
+        <div class="text-end">
+            <div class="fs-3">@latest.Close.ToString("$#,##0.00##")</div>
+            <div class="small">
+                <span class="@SignClass(latestChange)">@FormatSigned(latestChange, "$#,##0.00") (@FormatSigned(latestChangePercent, "0.00%"))</span>
+                <span class="text-muted">· @latest.Date.ToString("d")</span>
+            </div>
+        </div>
+    }
+</div>
+
+@if (history is null)
+{
+    <p><em>Loading...</em></p>
+}
+else if (history.Count == 0)
+{
+    <div class="alert alert-info">
+        No price data for @normalizedSymbol yet. Go back to the <a href="watchlist">watchlist</a> and click <strong>Refresh prices</strong>.
+    </div>
+}
+else
+{
+    <div class="btn-group btn-group-sm mb-2" role="group" aria-label="Chart range">
+        @foreach (var (label, months) in Ranges)
+        {
+            <button type="button" class="btn @(selectedMonths == months ? "btn-primary" : "btn-outline-primary")" @onclick="() => SetRangeAsync(months)">@label</button>
+        }
+    </div>
+
+    <div @ref="chartElement" style="height: 640px; width: 100%;"></div>
+    <p class="small text-muted mt-1">
+        Panes: price with SMA 20 / 50 / 200 and Bollinger Bands (20, 2) · RSI (14) · MACD (12, 26, 9).
+        Charts by <a href="https://www.tradingview.com/" target="_blank" rel="noopener">TradingView</a> Lightweight Charts&trade;.
+    </p>
+
+    @if (snapshot is not null)
+    {
+        <h2 class="h5 mt-4">Latest indicator readings</h2>
+        <div class="table-responsive">
+            <table class="table table-sm" style="max-width: 48rem;">
+                <thead>
+                    <tr><th>Indicator</th><th class="text-end">Value</th><th>Reading</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var row in snapshot)
+                    {
+                        <tr>
+                            <td>@row.Name</td>
+                            <td class="text-end">@row.Value</td>
+                            <td class="text-muted">@row.Reading</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <p class="small text-muted">
+            Readings describe each indicator using common conventions; they are not buy/sell recommendations.
+        </p>
+    }
+}
+
+@code {
+    private static readonly (string Label, int Months)[] Ranges = [("3M", 3), ("6M", 6), ("1Y", 12), ("2Y", 0)];
+
+    [Parameter]
+    public string Symbol { get; set; } = "";
+
+    [CascadingParameter]
+    private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private string normalizedSymbol = "";
+    private string? companyName;
+    private List<DailyPrice>? history;
+    private DailyPrice? latest;
+    private decimal? latestChange;
+    private decimal? latestChangePercent;
+    private ChartData? chartData;
+    private List<SnapshotRow>? snapshot;
+    private int selectedMonths = 6;
+
+    private ElementReference chartElement;
+    private IJSObjectReference? module;
+    private bool chartRendered;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        normalizedSymbol = WatchlistService.NormalizeSymbol(Symbol);
+        chartRendered = false;
+
+        var userId = (await AuthState).User.FindFirstValue(ClaimTypes.NameIdentifier)!;
+        companyName = (await WatchlistService.GetForUserAsync(userId))
+            .FirstOrDefault(w => w.Symbol == normalizedSymbol)?.CompanyName;
+
+        history = await PriceDataService.GetHistoryAsync(normalizedSymbol);
+        if (history.Count == 0)
+        {
+            return;
+        }
+
+        latest = history[^1];
+        if (history.Count > 1)
+        {
+            var prev = history[^2].Close;
+            latestChange = latest.Close - prev;
+            latestChangePercent = prev != 0 ? latestChange / prev : null;
+        }
+
+        BuildIndicators(history);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (chartData is null || chartRendered)
+        {
+            return;
+        }
+
+        chartRendered = true;
+        try
+        {
+            module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/stockChart.js");
+            await module.InvokeVoidAsync("render", chartElement, chartData with { InitialMonths = selectedMonths });
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Chart render failed for {Symbol}", normalizedSymbol);
+        }
+    }
+
+    private async Task SetRangeAsync(int months)
+    {
+        selectedMonths = months;
+        if (module is not null)
+        {
+            await module.InvokeVoidAsync("setRange", chartElement, months);
+        }
+    }
+
+    private void BuildIndicators(List<DailyPrice> prices)
+    {
+        var closes = prices.Select(p => (double)p.Close).ToArray();
+        var sma20 = Indicators.Sma(closes, 20);
+        var sma50 = Indicators.Sma(closes, 50);
+        var sma200 = Indicators.Sma(closes, 200);
+        var rsi = Indicators.Rsi(closes, 14);
+        var macd = Indicators.Macd(closes);
+        var bb = Indicators.Bollinger(closes);
+
+        chartData = new ChartData(
+            Times: prices.Select(p => p.Date.ToString("yyyy-MM-dd")).ToArray(),
+            Open: prices.Select(p => (double)p.Open).ToArray(),
+            High: prices.Select(p => (double)p.High).ToArray(),
+            Low: prices.Select(p => (double)p.Low).ToArray(),
+            Close: closes,
+            Sma20: sma20, Sma50: sma50, Sma200: sma200,
+            BbUpper: bb.Upper, BbLower: bb.Lower,
+            Rsi: rsi,
+            Macd: macd.Macd, MacdSignal: macd.Signal, MacdHist: macd.Histogram,
+            InitialMonths: selectedMonths);
+
+        var i = closes.Length - 1;
+        var close = closes[i];
+        snapshot =
+        [
+            MaRow("SMA 20", close, sma20[i]),
+            MaRow("SMA 50", close, sma50[i]),
+            MaRow("SMA 200", close, sma200[i]),
+            new("RSI (14)", Fmt(rsi[i], "0.0"), rsi[i] switch
+            {
+                null => "Not enough data",
+                >= 70 => "Overbought zone (70 or above)",
+                <= 30 => "Oversold zone (30 or below)",
+                _ => "Neutral range (30–70)"
+            }),
+            new("MACD (12, 26, 9)", Fmt(macd.Macd[i], "0.00"), macd.Macd[i] is double m && macd.Signal[i] is double s
+                ? $"{(m >= s ? "Above" : "Below")} signal line ({s:0.00}); histogram {macd.Histogram[i]:+0.00;-0.00}"
+                : "Not enough data"),
+            new("Bollinger Bands (20, 2)", bb.Upper[i] is double u && bb.Lower[i] is double l ? $"{l:$#,##0.00} – {u:$#,##0.00}" : "",
+                bb.Upper[i] is double up && bb.Lower[i] is double lo && up != lo
+                    ? $"Price at {(close - lo) / (up - lo):0%} of band width (%B)"
+                    : "Not enough data"),
+        ];
+    }
+
+    private static SnapshotRow MaRow(string name, double close, double? ma) =>
+        new(name, Fmt(ma, "$#,##0.00"), ma is double v ? $"Price {(close >= v ? "above" : "below")} by {(close - v) / v:+0.0%;-0.0%}" : "Not enough data");
+
+    private static string Fmt(double? value, string format) => value is double v ? v.ToString(format) : "";
+
+    private static string FormatSigned(decimal? value, string format) =>
+        value is decimal v ? (v > 0 ? "+" : v < 0 ? "-" : "") + Math.Abs(v).ToString(format) : "";
+
+    private static string SignClass(decimal? value) => value switch
+    {
+        > 0 => "text-success",
+        < 0 => "text-danger",
+        _ => ""
+    };
+
+    public async ValueTask DisposeAsync()
+    {
+        if (module is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await module.InvokeVoidAsync("dispose", chartElement);
+            await module.DisposeAsync();
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+    }
+
+    private sealed record SnapshotRow(string Name, string Value, string Reading);
+
+    // Serialized to camelCase for stockChart.js.
+    private sealed record ChartData(
+        string[] Times, double[] Open, double[] High, double[] Low, double[] Close,
+        double?[] Sma20, double?[] Sma50, double?[] Sma200,
+        double?[] BbUpper, double?[] BbLower,
+        double?[] Rsi,
+        double?[] Macd, double?[] MacdSignal, double?[] MacdHist,
+        int InitialMonths);
+}

@@ -86,7 +86,7 @@ else
 
                     <tr>
                         <td title="Added @item.AddedAtUtc.ToLocalTime().ToString("d")">
-                            <strong>@item.Symbol</strong>
+                            <a href="watchlist/@item.Symbol" title="View chart and indicators"><strong>@item.Symbol</strong></a>
                             @if (item.CompanyName is not null)
                             {
                                 <div class="small text-muted">@item.CompanyName</div>

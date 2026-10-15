@@ -47,6 +47,18 @@ public class PriceDataService(
         }
     }
 
+    /// <summary>All stored daily prices for a symbol, oldest first.</summary>
+    public async Task<List<DailyPrice>> GetHistoryAsync(string symbol, CancellationToken ct = default)
+    {
+        symbol = WatchlistService.NormalizeSymbol(symbol);
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        return await db.DailyPrices
+            .AsNoTracking()
+            .Where(p => p.Symbol == symbol)
+            .OrderBy(p => p.Date)
+            .ToListAsync(ct);
+    }
+
     /// <summary>Latest close and the prior close for each symbol that has stored prices.</summary>
     public async Task<Dictionary<string, PriceSummary>> GetLatestAsync(IEnumerable<string> symbols, CancellationToken ct = default)
     {
