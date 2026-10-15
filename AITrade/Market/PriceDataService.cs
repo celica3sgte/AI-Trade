@@ -6,6 +6,11 @@ namespace AITrade.Market;
 
 public sealed record PriceSummary(string Symbol, DateOnly Date, decimal Close, decimal? PreviousClose)
 {
+    /// <summary>Latest and prior close from a history ordered oldest first; null if empty.</summary>
+    public static PriceSummary? FromHistory(IReadOnlyList<DailyPrice> history) =>
+        history.Count == 0 ? null
+            : new(history[^1].Symbol, history[^1].Date, history[^1].Close, history.Count > 1 ? history[^2].Close : null);
+
     public decimal? Change => PreviousClose is decimal prev ? Close - prev : null;
 
     public decimal? ChangePercent => PreviousClose is decimal prev && prev != 0 ? (Close - prev) / prev : null;
@@ -59,28 +64,19 @@ public class PriceDataService(
             .ToListAsync(ct);
     }
 
-    /// <summary>Latest close and the prior close for each symbol that has stored prices.</summary>
-    public async Task<Dictionary<string, PriceSummary>> GetLatestAsync(IEnumerable<string> symbols, CancellationToken ct = default)
+    /// <summary>All stored daily prices for each symbol, oldest first, in one query.</summary>
+    public async Task<Dictionary<string, List<DailyPrice>>> GetHistoriesAsync(IEnumerable<string> symbols, CancellationToken ct = default)
     {
-        var list = symbols.Distinct().ToList();
-        // Two weeks comfortably covers the last two trading days across weekends and holidays.
-        var since = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-14));
-
+        var list = symbols.Select(WatchlistService.NormalizeSymbol).Distinct().ToList();
         await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var recent = await db.DailyPrices
+        var rows = await db.DailyPrices
             .AsNoTracking()
-            .Where(p => list.Contains(p.Symbol) && p.Date >= since)
-            .Select(p => new { p.Symbol, p.Date, p.Close })
+            .Where(p => list.Contains(p.Symbol))
+            .OrderBy(p => p.Symbol).ThenBy(p => p.Date)
             .ToListAsync(ct);
 
-        return recent
-            .GroupBy(p => p.Symbol)
-            .Select(g =>
-            {
-                var lastTwo = g.OrderByDescending(p => p.Date).Take(2).ToList();
-                return new PriceSummary(g.Key, lastTwo[0].Date, lastTwo[0].Close, lastTwo.Count > 1 ? lastTwo[1].Close : null);
-            })
-            .ToDictionary(s => s.Symbol, StringComparer.OrdinalIgnoreCase);
+        return rows.GroupBy(p => p.Symbol)
+            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
     }
 
     private async Task SaveAsync(string[] symbols, Dictionary<string, List<AlpacaBar>> bars, DateOnly start, CancellationToken ct)

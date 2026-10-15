@@ -50,6 +50,58 @@ else if (history.Count == 0)
 }
 else
 {
+    @if (recommendation is not null)
+    {
+        <div class="card mb-4">
+            <div class="card-body">
+                <div class="d-flex flex-wrap align-items-center gap-3 mb-2">
+                    <h2 class="h5 mb-0">Signal</h2>
+                    <span class="fs-5"><RecommendationBadge Recommendation="recommendation" /></span>
+                    <span class="text-muted small">
+                        Score @recommendation.Score.ToString("+0.00;-0.00;0.00") (range -1 to +1)
+                        · @(isOwned ? "you own this stock" : "you don't own this stock")
+                        · as of @recommendation.AsOf.ToString("d")
+                    </span>
+                </div>
+                <table class="table table-sm mb-2">
+                    <thead>
+                        <tr><th>Strategy</th><th>Vote</th><th>Why</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var vote in recommendation.Votes)
+                        {
+                            <tr>
+                                <td class="text-nowrap">@vote.Strategy</td>
+                                <td class="text-nowrap">
+                                    @if (vote.Vote > 0)
+                                    {
+                                        <span class="text-success">&#9650; Bullish</span>
+                                    }
+                                    else if (vote.Vote < 0)
+                                    {
+                                        <span class="text-danger">&#9660; Bearish</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-muted">&#8212; Neutral</span>
+                                    }
+                                </td>
+                                <td>@vote.Reason</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+                <p class="small text-muted mb-0">
+                    Each strategy votes +1, 0 or -1 and the score is the average.
+                    @(isOwned
+                        ? $"Buy more at +{SignalEngine.ActionThreshold:0.0} or higher, Sell at -{SignalEngine.ActionThreshold:0.0} or lower, otherwise Hold."
+                        : $"Buy at +{SignalEngine.ActionThreshold:0.0} or higher, otherwise Wait.")
+                    These rules haven't been backtested yet and are not financial advice.
+                </p>
+            </div>
+        </div>
+    }
+
     <div class="btn-group btn-group-sm mb-2" role="group" aria-label="Chart range">
         @foreach (var (label, months) in Ranges)
         {
@@ -100,6 +152,8 @@ else
 
     private string normalizedSymbol = "";
     private string? companyName;
+    private bool isOwned;
+    private Recommendation? recommendation;
     private List<DailyPrice>? history;
     private DailyPrice? latest;
     private decimal? latestChange;
@@ -118,8 +172,9 @@ else
         chartRendered = false;
 
         var userId = (await AuthState).User.FindFirstValue(ClaimTypes.NameIdentifier)!;
-        companyName = (await WatchlistService.GetForUserAsync(userId))
-            .FirstOrDefault(w => w.Symbol == normalizedSymbol)?.CompanyName;
+        var item = (await WatchlistService.GetForUserAsync(userId)).FirstOrDefault(w => w.Symbol == normalizedSymbol);
+        companyName = item?.CompanyName;
+        isOwned = item?.IsOwned ?? false;
 
         history = await PriceDataService.GetHistoryAsync(normalizedSymbol);
         if (history.Count == 0)
@@ -136,6 +191,7 @@ else
         }
 
         BuildIndicators(history);
+        recommendation = SignalEngine.Evaluate(history, isOwned, SignalEngine.MarketToday());
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)

@@ -67,6 +67,7 @@ else
                     <th>Symbol</th>
                     <th class="text-end">Last close</th>
                     <th class="text-end">Day change</th>
+                    <th>Signal</th>
                     <th class="text-end">Shares</th>
                     <th class="text-end">Avg cost / share</th>
                     <th class="text-end">Total cost</th>
@@ -105,6 +106,11 @@ else
                         </td>
                         <td class="text-end @SignClass(price?.Change)">
                             @FormatChange(price?.Change, price?.ChangePercent)
+                        </td>
+                        <td class="text-nowrap">
+                            <a href="watchlist/@item.Symbol" class="text-decoration-none" title="See why">
+                                <RecommendationBadge Recommendation="@signals.GetValueOrDefault(item.Symbol)" />
+                            </a>
                         </td>
 
                         @if (editingId == item.Id)
@@ -154,6 +160,7 @@ else
     <p class="small text-muted">
         Prices are daily closes from Alpaca, adjusted for splits and dividends, and are at least 15 minutes delayed.
         During market hours the latest value is the day's price so far.
+        Signals combine common technical strategies, haven't been backtested yet, and are not financial advice.
     </p>
 }
 
@@ -166,7 +173,9 @@ else
 
     private InputModel Input { get; set; } = new();
     private List<WatchlistItem>? items;
+    private Dictionary<string, List<DailyPrice>> histories = new(StringComparer.OrdinalIgnoreCase);
     private Dictionary<string, PriceSummary> prices = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, Recommendation> signals = new(StringComparer.OrdinalIgnoreCase);
     private string userId = default!;
     private string? message;
     private bool busy;
@@ -186,7 +195,32 @@ else
     private async Task LoadAsync()
     {
         items = await WatchlistService.GetForUserAsync(userId);
-        prices = await PriceDataService.GetLatestAsync(items.Select(i => i.Symbol));
+        await LoadPricesAsync();
+    }
+
+    private async Task LoadPricesAsync()
+    {
+        histories = await PriceDataService.GetHistoriesAsync(items!.Select(i => i.Symbol));
+        prices = histories.Values
+            .Select(PriceSummary.FromHistory)
+            .OfType<PriceSummary>()
+            .ToDictionary(p => p.Symbol, StringComparer.OrdinalIgnoreCase);
+        ComputeSignals();
+    }
+
+    // Signals depend on ownership (Buy/Wait vs Buy more/Hold/Sell), so recompute after holdings change.
+    private void ComputeSignals()
+    {
+        var today = SignalEngine.MarketToday();
+        signals = new(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in items!)
+        {
+            if (histories.TryGetValue(item.Symbol, out var history)
+                && SignalEngine.Evaluate(history, item.IsOwned, today) is { } recommendation)
+            {
+                signals[item.Symbol] = recommendation;
+            }
+        }
     }
 
     private async Task AddAsync()
@@ -250,7 +284,7 @@ else
         try
         {
             await PriceDataService.RefreshAsync(items.Select(i => i.Symbol));
-            prices = await PriceDataService.GetLatestAsync(items.Select(i => i.Symbol));
+            await LoadPricesAsync();
         }
         catch (Exception ex)
         {
@@ -294,6 +328,7 @@ else
             await WatchlistService.UpdateHoldingAsync(userId, item.Id, editShares.Value, editCost);
             editingId = null;
             items = await WatchlistService.GetForUserAsync(userId);
+            ComputeSignals();
         }
         finally
         {
@@ -309,6 +344,7 @@ else
         {
             await WatchlistService.RemoveAsync(userId, item.Id);
             items = await WatchlistService.GetForUserAsync(userId);
+            ComputeSignals();
         }
         finally
         {
