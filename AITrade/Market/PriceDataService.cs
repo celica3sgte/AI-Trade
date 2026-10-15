@@ -22,10 +22,13 @@ public class PriceDataService(
     IOptions<AlpacaOptions> options,
     ILogger<PriceDataService> logger)
 {
-    // ~500 trading days per symbol at the default history length keeps each batch near one 10,000-bar page.
-    private const int SymbolsPerRequest = 20;
+    // Alpaca returns at most 10,000 bars per page (pagination handles more, but one page per batch is cheapest).
+    private const int BarsPerPage = 10_000;
 
     private readonly AlpacaOptions opts = options.Value;
+
+    // Size batches so each request fits in about one page: ~252 trading days per 365 calendar days.
+    private int SymbolsPerRequest => Math.Clamp(BarsPerPage / (opts.HistoryDays * 252 / 365 + 10), 1, 50);
 
     /// <summary>
     /// Re-downloads the full history window for each symbol and upserts it. Re-fetching everything (rather than

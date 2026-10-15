@@ -58,6 +58,17 @@ export async function render(element, data) {
     chart.addSeries(LC.LineSeries, line('#adb5bd', { lineStyle: LC.LineStyle.Dashed })).setData(toPoints(t, data.bbUpper));
     chart.addSeries(LC.LineSeries, line('#adb5bd', { lineStyle: LC.LineStyle.Dashed })).setData(toPoints(t, data.bbLower));
 
+    // ML.NET forecast: starts at the last close and extends into the next few (approximate) trading days.
+    if (data.forecastTimes && data.forecastTimes.length) {
+        const lastTime = t[t.length - 1];
+        const lastClose = data.close[data.close.length - 1];
+        const ahead = (values) => [{ time: lastTime, value: lastClose }, ...toPoints(data.forecastTimes, values)];
+        chart.addSeries(LC.LineSeries, line('#20c997', { lineWidth: 2, lineStyle: LC.LineStyle.Dashed, title: 'Forecast', lastValueVisible: true }))
+            .setData(ahead(data.forecastValues));
+        chart.addSeries(LC.LineSeries, line('#20c997', { lineStyle: LC.LineStyle.Dotted })).setData(ahead(data.forecastUpper));
+        chart.addSeries(LC.LineSeries, line('#20c997', { lineStyle: LC.LineStyle.Dotted })).setData(ahead(data.forecastLower));
+    }
+
     // Pane 1: RSI with the conventional 70/30 levels.
     const rsi = chart.addSeries(LC.LineSeries, line('#6610f2', { title: 'RSI 14', lastValueVisible: true }), 1);
     rsi.setData(toPoints(t, data.rsi));
@@ -75,8 +86,37 @@ export async function render(element, data) {
     panes[1]?.setHeight(110);
     panes[2]?.setHeight(130);
 
-    charts.set(element, { chart, times: t });
+    // Range buttons end at the last forecast day so the forecast stays in view.
+    const lastTime = data.forecastTimes?.length ? data.forecastTimes[data.forecastTimes.length - 1] : t[t.length - 1];
+    charts.set(element, { chart, times: t, lastTime });
     setRange(element, data.initialMonths);
+}
+
+// Backtest equity curves (strategy vs buy and hold) with buy/sell markers on the strategy line.
+export async function renderEquity(element, data) {
+    await loadLibrary();
+    dispose(element);
+
+    const LC = window.LightweightCharts;
+    const chart = LC.createChart(element, {
+        autoSize: true,
+        layout: { attributionLogo: true }, // Required attribution for TradingView Lightweight Charts.
+        rightPriceScale: { borderVisible: false },
+        timeScale: { borderVisible: false },
+        localization: { priceFormatter: p => '$' + p.toLocaleString(undefined, { maximumFractionDigits: 0 }) },
+    });
+
+    const strategy = chart.addSeries(LC.LineSeries, { color: '#0d6efd', lineWidth: 2, title: 'Strategy', priceLineVisible: false });
+    strategy.setData(toPoints(data.times, data.strategy));
+    chart.addSeries(LC.LineSeries, { color: '#adb5bd', lineWidth: 2, title: 'Buy & hold', priceLineVisible: false })
+        .setData(toPoints(data.times, data.buyHold));
+
+    LC.createSeriesMarkers(strategy, data.trades.map(t => t.side === 'Buy'
+        ? { time: t.time, position: 'belowBar', color: '#198754', shape: 'arrowUp', text: 'Buy' }
+        : { time: t.time, position: 'aboveBar', color: '#dc3545', shape: 'arrowDown', text: 'Sell' }));
+
+    chart.timeScale().fitContent();
+    charts.set(element, { chart, times: data.times });
 }
 
 export function setRange(element, months) {
@@ -84,7 +124,7 @@ export function setRange(element, months) {
     if (!entry || entry.times.length === 0) {
         return;
     }
-    const last = entry.times[entry.times.length - 1];
+    const last = entry.lastTime ?? entry.times[entry.times.length - 1];
     if (!months) {
         entry.chart.timeScale().fitContent();
         return;

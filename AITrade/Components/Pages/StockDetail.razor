@@ -111,7 +111,7 @@ else
 
     <div @ref="chartElement" style="height: 640px; width: 100%;"></div>
     <p class="small text-muted mt-1">
-        Panes: price with SMA 20 / 50 / 200 and Bollinger Bands (20, 2) · RSI (14) · MACD (12, 26, 9).
+        Panes: price with SMA 20 / 50 / 200, Bollinger Bands (20, 2) and the ML.NET @PriceForecaster.Horizon-day forecast (dashed teal, dotted 95% range) · RSI (14) · MACD (12, 26, 9).
         Charts by <a href="https://www.tradingview.com/" target="_blank" rel="noopener">TradingView</a> Lightweight Charts&trade;.
     </p>
 
@@ -142,7 +142,8 @@ else
 }
 
 @code {
-    private static readonly (string Label, int Months)[] Ranges = [("3M", 3), ("6M", 6), ("1Y", 12), ("2Y", 0)];
+    // 0 = all stored history.
+    private static readonly (string Label, int Months)[] Ranges = [("3M", 3), ("6M", 6), ("1Y", 12), ("2Y", 24), ("5Y", 60), ("All", 0)];
 
     [Parameter]
     public string Symbol { get; set; } = "";
@@ -234,6 +235,8 @@ else
         var rsi = Indicators.Rsi(closes, 14);
         var macd = Indicators.Macd(closes);
         var bb = Indicators.Bollinger(closes);
+        var forecast = PriceForecaster.Forecast(closes, closes.Length - 1);
+        var forecastTimes = forecast is null ? null : NextWeekdays(prices[^1].Date, PriceForecaster.Horizon);
 
         chartData = new ChartData(
             Times: prices.Select(p => p.Date.ToString("yyyy-MM-dd")).ToArray(),
@@ -245,6 +248,7 @@ else
             BbUpper: bb.Upper, BbLower: bb.Lower,
             Rsi: rsi,
             Macd: macd.Macd, MacdSignal: macd.Signal, MacdHist: macd.Histogram,
+            ForecastTimes: forecastTimes, ForecastValues: forecast?.Values, ForecastLower: forecast?.Lower, ForecastUpper: forecast?.Upper,
             InitialMonths: selectedMonths);
 
         var i = closes.Length - 1;
@@ -268,7 +272,27 @@ else
                 bb.Upper[i] is double up && bb.Lower[i] is double lo && up != lo
                     ? $"Price at {(close - lo) / (up - lo):0%} of band width (%B)"
                     : "Not enough data"),
+            forecast is null
+                ? new($"ML.NET forecast ({PriceForecaster.Horizon}-day)", "", "Not enough history to forecast")
+                : new($"ML.NET forecast ({PriceForecaster.Horizon}-day)", forecast.Values[^1].ToString("$#,##0.00"),
+                    $"{forecast.ChangeFrom(close):+0.0%;-0.0%;0.0%} by {forecastTimes![^1]}; 95% range {forecast.Lower[^1]:$#,##0.00} – {forecast.Upper[^1]:$#,##0.00}"),
         ];
+    }
+
+    // Approximate next trading days (weekdays; market holidays aren't excluded).
+    private static string[] NextWeekdays(DateOnly from, int count)
+    {
+        var days = new List<string>(count);
+        var d = from;
+        while (days.Count < count)
+        {
+            d = d.AddDays(1);
+            if (d.DayOfWeek is not (DayOfWeek.Saturday or DayOfWeek.Sunday))
+            {
+                days.Add(d.ToString("yyyy-MM-dd"));
+            }
+        }
+        return [.. days];
     }
 
     private static SnapshotRow MaRow(string name, double close, double? ma) =>
@@ -312,5 +336,6 @@ else
         double?[] BbUpper, double?[] BbLower,
         double?[] Rsi,
         double?[] Macd, double?[] MacdSignal, double?[] MacdHist,
+        string[]? ForecastTimes, double[]? ForecastValues, double[]? ForecastLower, double[]? ForecastUpper,
         int InitialMonths);
 }

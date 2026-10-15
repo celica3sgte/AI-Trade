@@ -17,8 +17,8 @@ public sealed class AlpacaOptions
     // "sip" = all US exchanges. Without a paid subscription, SIP queries must end at least 15 minutes ago.
     public string Feed { get; set; } = "sip";
 
-    // How much daily history to keep per symbol.
-    public int HistoryDays { get; set; } = 730;
+    // How much daily history to keep per symbol (calendar days). Alpaca's SIP daily bars go back to 2016.
+    public int HistoryDays { get; set; } = 3650;
 
     public bool IsConfigured => IsSet(KeyId) && IsSet(SecretKey);
 

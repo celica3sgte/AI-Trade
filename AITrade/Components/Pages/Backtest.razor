@@ -1,0 +1,339 @@
+@page "/backtest"
+@rendermode InteractiveServer
+
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Authorization
+@using AITrade.Data
+@using AITrade.Market
+
+@attribute [Authorize]
+@implements IAsyncDisposable
+
+@inject WatchlistService WatchlistService
+@inject PriceDataService PriceDataService
+@inject IJSRuntime JS
+@inject ILogger<Backtest> Logger
+
+<PageTitle>Backtest</PageTitle>
+
+<h1>Backtest</h1>
+<p class="text-muted">
+    Replays the signal rules over stored daily prices for your watchlist and compares the result with buying and holding.
+</p>
+
+<div class="card mb-4">
+    <div class="card-body">
+        <div class="row g-3 align-items-end">
+            <div class="col-sm-auto">
+                <label class="form-label" for="threshold">Score needed to act</label>
+                <select id="threshold" class="form-select" @bind="threshold">
+                    @foreach (var t in ThresholdOptions)
+                    {
+                        <option value="@t">±@t.ToString("0.0")@(t == SignalEngine.ActionThreshold ? " (current)" : "")</option>
+                    }
+                </select>
+            </div>
+            <div class="col-sm-auto">
+                <label class="form-label" for="cash">Starting cash ($)</label>
+                <input id="cash" type="number" class="form-control" min="100" step="100" style="max-width: 9rem;" @bind="startingCash" />
+            </div>
+            <div class="col-sm-auto">
+                <label class="form-label" for="cost">Cost per trade (bps)</label>
+                <input id="cost" type="number" class="form-control" min="0" max="500" step="1" style="max-width: 7rem;" @bind="costBps" title="1 bps = 0.01%. Covers spread/slippage." />
+            </div>
+            <div class="col-sm">
+                <div class="form-label">Strategies</div>
+                @foreach (var s in Enum.GetValues<Strategy>())
+                {
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input" type="checkbox" id="s-@s" checked="@enabled.Contains(s)" @onchange="e => Toggle(s, (bool)e.Value!)" />
+                        <label class="form-check-label" for="s-@s">@SignalEngine.DisplayName(s)</label>
+                    </div>
+                }
+            </div>
+            <div class="col-sm-auto">
+                <button class="btn btn-primary" disabled="@(running || enabled.Count == 0)" @onclick="RunAsync">@(running ? "Running..." : "Run backtest")</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@if (message is not null)
+{
+    <div class="alert alert-warning">@message</div>
+}
+
+@if (results is { Count: > 0 })
+{
+    <div class="table-responsive">
+        <table class="table table-hover align-middle">
+            <thead>
+                <tr>
+                    <th>Symbol</th>
+                    <th>Period</th>
+                    <th class="text-end">Strategy return</th>
+                    <th class="text-end">Buy &amp; hold</th>
+                    <th class="text-end">Difference</th>
+                    <th class="text-end">Max drawdown</th>
+                    <th class="text-end">Trades</th>
+                    <th class="text-end">Win rate</th>
+                    <th class="text-end">Time in market</th>
+                    @if (showForecastColumns)
+                    {
+                        <th class="text-end" title="How often the 5-day forecast got the direction of the move right">Forecast direction</th>
+                        <th class="text-end" title="Average 5-day forecast error vs assuming no change (lower is better)">Forecast error vs no-change</th>
+                    }
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var r in results)
+                {
+                    var diff = r.TotalReturn - r.BuyAndHoldReturn;
+                    <tr role="button" class="@(selected == r ? "table-active" : "")" @onclick="() => Select(r)">
+                        <td><strong>@r.Symbol</strong></td>
+                        <td class="small text-muted text-nowrap">@r.StartDate.ToString("d") – @r.EndDate.ToString("d")</td>
+                        <td class="text-end @SignClass(r.TotalReturn)">@Pct(r.TotalReturn)</td>
+                        <td class="text-end @SignClass(r.BuyAndHoldReturn)">@Pct(r.BuyAndHoldReturn)</td>
+                        <td class="text-end fw-semibold @SignClass(diff)">@Pct(diff)</td>
+                        <td class="text-end text-nowrap">@r.MaxDrawdown.ToString("0.0%") <span class="small text-muted">vs @r.BuyAndHoldMaxDrawdown.ToString("0.0%")</span></td>
+                        <td class="text-end">@r.Trades.Count@(r.EndsInMarket ? "*" : "")</td>
+                        <td class="text-end">@(r.WinRate is double w ? $"{w:0%} ({r.WinningRoundTrips}/{r.RoundTrips})" : "–")</td>
+                        <td class="text-end">@r.Exposure.ToString("0%")</td>
+                        @if (showForecastColumns)
+                        {
+                            @if (r.Forecast is { } f)
+                            {
+                                <td class="text-end">@f.DirectionHitRate.ToString("0%") <span class="small text-muted">(@f.Samples)</span></td>
+                                <td class="text-end text-nowrap @(f.MeanAbsError < f.NaiveMeanAbsError ? "text-success" : "text-danger")">
+                                    @f.MeanAbsError.ToString("0.00%") <span class="small text-muted">vs @f.NaiveMeanAbsError.ToString("0.00%")</span>
+                                </td>
+                            }
+                            else
+                            {
+                                <td class="text-end">–</td>
+                                <td class="text-end">–</td>
+                            }
+                        }
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+    <p class="small text-muted">
+        Click a row for its equity curve and trades. Max drawdown is the largest peak-to-trough drop (strategy vs buy &amp; hold).
+        Win rate counts completed buy→sell round trips. * still holding at the end (counted at the last close).
+        @if (showForecastColumns)
+        {
+            <span>
+                Forecast columns check every walk-forward @PriceForecaster.Horizon-day forecast against what happened: direction is right more than half the time only if it beats a coin flip,
+                and its average error is green only if it beats simply assuming the price stays the same.
+            </span>
+        }
+        @if (skipped.Count > 0)
+        {
+            <span>Skipped (fewer than @(Backtester.WarmupBars + 2) days of prices): @string.Join(", ", skipped).</span>
+        }
+    </p>
+}
+
+@if (selected is not null)
+{
+    <h2 class="h5 mt-4">@selected.Symbol: strategy vs buy &amp; hold</h2>
+    <div @ref="chartElement" style="height: 360px; width: 100%;"></div>
+    <p class="small text-muted mt-1">
+        Ending value @Money(selected.FinalValue) vs @Money(selected.BuyAndHoldFinalValue) buy &amp; hold, from @Money(selected.StartingCash).
+        Charts by <a href="https://www.tradingview.com/" target="_blank" rel="noopener">TradingView</a> Lightweight Charts&trade;.
+    </p>
+
+    @if (selected.Trades.Count == 0)
+    {
+        <p>No trades: the score never reached the threshold during this period.</p>
+    }
+    else
+    {
+        <div class="table-responsive">
+            <table class="table table-sm" style="max-width: 48rem;">
+                <thead>
+                    <tr><th>Signal date</th><th>Executed</th><th>Side</th><th class="text-end">Price</th><th class="text-end">Shares</th><th class="text-end">Score</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var t in selected.Trades)
+                    {
+                        <tr>
+                            <td>@t.SignalDate.ToString("d")</td>
+                            <td>@t.Date.ToString("d")</td>
+                            <td class="@(t.Side == TradeSide.Buy ? "text-success" : "text-danger")">@t.Side</td>
+                            <td class="text-end">@Money(t.Price)</td>
+                            <td class="text-end">@t.Shares.ToString("#,##0.####")</td>
+                            <td class="text-end">@t.Score.ToString("+0.00;-0.00;0.00")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+}
+
+<div class="alert alert-light border small mt-4">
+    <strong>How to read this.</strong>
+    Signals use only data available at each day's close and trade at the next day's open (long only, all in / all out).
+    The first @Backtester.WarmupBars trading days (about 10 months) warm up the 200-day average, so each test starts that far after the stock's first stored price; see the Period column.
+    Choosing settings because they did best on this same data tends to overstate how well they will work going forward.
+    Past results don't guarantee future returns; this is not financial advice.
+</div>
+
+@code {
+    private static readonly double[] ThresholdOptions = [0.2, 0.4, 0.6, 0.8, 1.0];
+
+    [CascadingParameter]
+    private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private double threshold = SignalEngine.ActionThreshold;
+    private decimal startingCash = 10_000m;
+    private decimal costBps = 5m;
+    private readonly HashSet<Strategy> enabled = Enum.GetValues<Strategy>().ToHashSet();
+
+    private List<BacktestResult>? results;
+    private List<string> skipped = [];
+    private BacktestResult? selected;
+    private bool showForecastColumns;
+    private string? message;
+    private bool running;
+
+    private ElementReference chartElement;
+    private IJSObjectReference? module;
+    private bool chartPending;
+
+    private void Toggle(Strategy strategy, bool on)
+    {
+        if (on)
+        {
+            enabled.Add(strategy);
+        }
+        else
+        {
+            enabled.Remove(strategy);
+        }
+    }
+
+    private async Task RunAsync()
+    {
+        running = true;
+        message = null;
+        try
+        {
+            var userId = (await AuthState).User.FindFirstValue(ClaimTypes.NameIdentifier)!;
+            var symbols = (await WatchlistService.GetForUserAsync(userId)).Select(w => w.Symbol).ToList();
+            if (symbols.Count == 0)
+            {
+                message = "Your watchlist is empty. Add stocks on the Watchlist page first.";
+                results = null;
+                selected = null;
+                return;
+            }
+
+            var histories = await PriceDataService.GetHistoriesAsync(symbols);
+            var settings = new SignalSettings(threshold, enabled.ToHashSet());
+            var options = new BacktestOptions(Math.Max(100, startingCash), Math.Clamp(costBps, 0, 500));
+
+            results = [];
+            skipped = [];
+            showForecastColumns = settings.Enabled.Contains(Strategy.Forecast);
+            foreach (var symbol in symbols)
+            {
+                // CPU-bound (one ML.NET model per simulated day when the forecast is enabled); keep it off the circuit's thread.
+                var result = histories.TryGetValue(symbol, out var history)
+                    ? await Task.Run(() => Backtester.Run(symbol, history, settings, options))
+                    : null;
+                if (result is null)
+                {
+                    skipped.Add(symbol);
+                }
+                else
+                {
+                    results.Add(result);
+                }
+            }
+
+            if (results.Count == 0)
+            {
+                message = "None of your stocks have enough price history yet. Refresh prices on the Watchlist page.";
+            }
+
+            // Keep the same symbol selected across re-runs so settings can be compared.
+            selected = results.FirstOrDefault(r => r.Symbol == selected?.Symbol) ?? results.FirstOrDefault();
+            chartPending = selected is not null;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Backtest failed");
+            message = $"Backtest failed: {ex.Message}";
+        }
+        finally
+        {
+            running = false;
+        }
+    }
+
+    private void Select(BacktestResult result)
+    {
+        selected = result;
+        chartPending = true;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!chartPending || selected is null)
+        {
+            return;
+        }
+
+        chartPending = false;
+        try
+        {
+            module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/stockChart.js");
+            await module.InvokeVoidAsync("renderEquity", chartElement, new
+            {
+                times = selected.Equity.Select(e => e.Date.ToString("yyyy-MM-dd")).ToArray(),
+                strategy = selected.Equity.Select(e => (double)e.Strategy).ToArray(),
+                buyHold = selected.Equity.Select(e => (double)e.BuyAndHold).ToArray(),
+                trades = selected.Trades.Select(t => new { time = t.Date.ToString("yyyy-MM-dd"), side = t.Side.ToString() }).ToArray(),
+            });
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Equity chart render failed");
+        }
+    }
+
+    private static string Pct(double value) => value.ToString("+0.0%;-0.0%;0.0%");
+
+    private static string Money(decimal value) => value.ToString("$#,##0.00");
+
+    private static string SignClass(double value) => value switch
+    {
+        > 0 => "text-success",
+        < 0 => "text-danger",
+        _ => ""
+    };
+
+    public async ValueTask DisposeAsync()
+    {
+        if (module is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await module.InvokeVoidAsync("dispose", chartElement);
+            await module.DisposeAsync();
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+    }
+}
