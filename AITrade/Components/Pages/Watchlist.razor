@@ -109,7 +109,7 @@ else
                         </td>
                         <td class="text-nowrap">
                             <a href="watchlist/@item.Symbol" class="text-decoration-none" title="See why">
-                                <RecommendationBadge Recommendation="@signals.GetValueOrDefault(item.Symbol)" />
+                                <TradeSignalBadge Signal="@signals.GetValueOrDefault(item.Symbol)" IsOwned="@item.IsOwned" />
                             </a>
                         </td>
 
@@ -160,7 +160,10 @@ else
     <p class="small text-muted">
         Prices are daily closes from Alpaca, adjusted for splits and dividends, and are at least 15 minutes delayed.
         During market hours the latest value is the day's price so far.
-        Signals combine common technical strategies, haven't been backtested yet, and are not financial advice.
+        Signals combine common technical strategies and an ML.NET price forecast, using the same rules and default settings as the <a href="backtest">Backtest</a> page:
+        Buy or Sell appears only on the day the backtest would place a new marker (trading at the next open); otherwise it shows Hold or Wait since its last trade.
+        Signals use final daily closes only, not a bar still forming during market hours. "Check" means your holding doesn't match the backtest's position.
+        Past results don't guarantee future returns, and signals are not financial advice.
     </p>
 }
 
@@ -175,7 +178,7 @@ else
     private List<WatchlistItem>? items;
     private Dictionary<string, List<DailyPrice>> histories = new(StringComparer.OrdinalIgnoreCase);
     private Dictionary<string, PriceSummary> prices = new(StringComparer.OrdinalIgnoreCase);
-    private Dictionary<string, Recommendation> signals = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, TradeSignal> signals = new(StringComparer.OrdinalIgnoreCase);
     private string userId = default!;
     private string? message;
     private bool busy;
@@ -205,22 +208,28 @@ else
             .Select(PriceSummary.FromHistory)
             .OfType<PriceSummary>()
             .ToDictionary(p => p.Symbol, StringComparer.OrdinalIgnoreCase);
-        ComputeSignals();
+        await ComputeSignalsAsync();
     }
 
-    // Signals depend on ownership (Buy/Wait vs Buy more/Hold/Sell), so recompute after holdings change.
-    private void ComputeSignals()
+    // Same rules and default settings as the backtest, so a Buy/Sell here is a new marker on its chart. Signals depend
+    // only on prices (holdings just drive the "Check" hint), so they're recomputed only when prices load.
+    private async Task ComputeSignalsAsync()
     {
         var today = SignalEngine.MarketToday();
-        signals = new(StringComparer.OrdinalIgnoreCase);
-        foreach (var item in items!)
+        var loaded = histories;
+        // CPU-bound when the forecast votes (one ML.NET model per scanned day); keep it off the circuit's thread.
+        signals = await Task.Run(() =>
         {
-            if (histories.TryGetValue(item.Symbol, out var history)
-                && SignalEngine.Evaluate(history, item.IsOwned, today) is { } recommendation)
+            var result = new Dictionary<string, TradeSignal>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (symbol, history) in loaded)
             {
-                signals[item.Symbol] = recommendation;
+                if (Backtester.CurrentSignal(history, SignalSettings.Default, today) is { } signal)
+                {
+                    result[symbol] = signal;
+                }
             }
-        }
+            return result;
+        });
     }
 
     private async Task AddAsync()
@@ -328,7 +337,6 @@ else
             await WatchlistService.UpdateHoldingAsync(userId, item.Id, editShares.Value, editCost);
             editingId = null;
             items = await WatchlistService.GetForUserAsync(userId);
-            ComputeSignals();
         }
         finally
         {
@@ -344,7 +352,6 @@ else
         {
             await WatchlistService.RemoveAsync(userId, item.Id);
             items = await WatchlistService.GetForUserAsync(userId);
-            ComputeSignals();
         }
         finally
         {

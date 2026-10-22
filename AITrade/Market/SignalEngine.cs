@@ -108,7 +108,11 @@ public static class SignalEngine
     public const double HighConfidenceThreshold = 0.8;
 
     // Daily data older than this (calendar days) is flagged, e.g. if prices haven't been refreshed.
-    private const int StaleAfterDays = 5;
+    public const int StaleAfterDays = 5;
+
+    // A daily bar is final once the 4 pm Eastern close is past the 15-minute data delay. Early-close days are
+    // treated the same, which only means a bar fetched between the early close and 4:16 pm waits for a refresh.
+    private static readonly TimeOnly BarFinalAt = new(16, 16);
 
     // Guards threshold comparisons against floating-point noise in averaged votes.
     private const double Epsilon = 1e-9;
@@ -121,6 +125,14 @@ public static class SignalEngine
     /// <summary>Today's date in US market (Eastern) time, matching how daily bars are dated.</summary>
     public static DateOnly MarketToday() =>
         DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, MarketTimeZone));
+
+    /// <summary>
+    /// True if the bar was last downloaded after its session closed. During market hours Alpaca returns the day's
+    /// bar so far, and a signal from it can still change by the close.
+    /// </summary>
+    public static bool IsFinal(DailyPrice bar) =>
+        TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(bar.UpdatedAtUtc, DateTimeKind.Utc), MarketTimeZone)
+            >= bar.Date.ToDateTime(BarFinalAt);
 
     /// <summary>Recommendation as of the latest bar in the history.</summary>
     public static Recommendation? Evaluate(IReadOnlyList<DailyPrice> history, bool isOwned, DateOnly today, SignalSettings? settings = null)

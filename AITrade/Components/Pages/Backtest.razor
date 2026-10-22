@@ -18,7 +18,7 @@
 
 <h1>Backtest</h1>
 <p class="text-muted">
-    Replays the signal rules over stored daily prices for your watchlist and compares the result with buying and holding.
+    Replays the signal rules over stored daily prices for the watchlist stocks you choose and compares the result with buying and holding.
 </p>
 
 <div class="card mb-4">
@@ -52,9 +52,27 @@
                 }
             </div>
             <div class="col-sm-auto">
-                <button class="btn btn-primary" disabled="@(running || enabled.Count == 0)" @onclick="RunAsync">@(running ? "Running..." : "Run backtest")</button>
+                <button class="btn btn-primary" disabled="@(running || enabled.Count == 0 || chosenSymbols.Count == 0)" @onclick="RunAsync">@(running ? "Running..." : "Run backtest")</button>
             </div>
         </div>
+        @if (watchlistSymbols.Count > 0)
+        {
+            <div class="mt-3">
+                <div class="form-label">
+                    Stocks
+                    <button type="button" class="btn btn-link btn-sm p-0 ms-2 align-baseline" @onclick="() => ChooseAll(true)">All</button>
+                    <span class="text-muted">·</span>
+                    <button type="button" class="btn btn-link btn-sm p-0 align-baseline" @onclick="() => ChooseAll(false)">None</button>
+                </div>
+                @foreach (var symbol in watchlistSymbols)
+                {
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input" type="checkbox" id="sym-@symbol" checked="@chosenSymbols.Contains(symbol)" @onchange="e => ToggleSymbol(symbol, (bool)e.Value!)" />
+                        <label class="form-check-label" for="sym-@symbol">@symbol</label>
+                    </div>
+                }
+            </div>
+        }
     </div>
 </div>
 
@@ -192,6 +210,8 @@
     private decimal startingCash = 10_000m;
     private decimal costBps = 5m;
     private readonly HashSet<Strategy> enabled = Enum.GetValues<Strategy>().ToHashSet();
+    private List<string> watchlistSymbols = [];
+    private readonly HashSet<string> chosenSymbols = new(StringComparer.OrdinalIgnoreCase);
 
     private List<BacktestResult>? results;
     private List<string> skipped = [];
@@ -216,17 +236,65 @@
         }
     }
 
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            watchlistSymbols = await LoadWatchlistSymbolsAsync();
+            chosenSymbols.UnionWith(watchlistSymbols);
+            if (watchlistSymbols.Count == 0)
+            {
+                message = "Your watchlist is empty. Add stocks on the Watchlist page first.";
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Loading watchlist failed");
+            message = $"Couldn't load your watchlist: {ex.Message}";
+        }
+    }
+
+    private async Task<List<string>> LoadWatchlistSymbolsAsync()
+    {
+        var userId = (await AuthState).User.FindFirstValue(ClaimTypes.NameIdentifier)!;
+        return (await WatchlistService.GetForUserAsync(userId)).Select(w => w.Symbol).ToList();
+    }
+
+    private void ToggleSymbol(string symbol, bool on)
+    {
+        if (on)
+        {
+            chosenSymbols.Add(symbol);
+        }
+        else
+        {
+            chosenSymbols.Remove(symbol);
+        }
+    }
+
+    private void ChooseAll(bool on)
+    {
+        if (on)
+        {
+            chosenSymbols.UnionWith(watchlistSymbols);
+        }
+        else
+        {
+            chosenSymbols.Clear();
+        }
+    }
+
     private async Task RunAsync()
     {
         running = true;
         message = null;
         try
         {
-            var userId = (await AuthState).User.FindFirstValue(ClaimTypes.NameIdentifier)!;
-            var symbols = (await WatchlistService.GetForUserAsync(userId)).Select(w => w.Symbol).ToList();
+            // Re-read the watchlist so stocks removed in another tab since the page loaded aren't tested.
+            var symbols = (await LoadWatchlistSymbolsAsync()).Where(chosenSymbols.Contains).ToList();
             if (symbols.Count == 0)
             {
-                message = "Your watchlist is empty. Add stocks on the Watchlist page first.";
+                message = "None of the chosen stocks are on your watchlist anymore. Reload the page.";
                 results = null;
                 selected = null;
                 return;

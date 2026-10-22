@@ -1,0 +1,73 @@
+@using AITrade.Market
+
+@if (Signal is not null)
+{
+    <span class="badge @BadgeClass" title="@Tooltip">@Label</span>
+    <span class="small text-muted ms-1">@Detail</span>
+    @if (OutOfSync)
+    {
+        <span class="badge text-bg-warning ms-1" title="@SyncTooltip">Check</span>
+    }
+    @if (Signal.IsStale)
+    {
+        <span class="badge text-bg-warning ms-1" title="Latest final price is from @Signal.SignalDate.ToString("d"). Refresh prices.">Stale</span>
+    }
+}
+else
+{
+    <span class="text-muted" title="Needs @(Backtester.WarmupBars + 1) final daily prices, the same as the backtest.">Not enough history</span>
+}
+
+@code {
+    [Parameter, EditorRequired]
+    public TradeSignal? Signal { get; set; }
+
+    // Your actual holding, compared with the backtest's position.
+    [Parameter]
+    public bool IsOwned { get; set; }
+
+    private string Label => Signal!.Pending switch
+    {
+        TradeSide.Buy => "Buy",
+        TradeSide.Sell => "Sell",
+        _ => Signal.InPosition ? "Hold" : "Wait"
+    };
+
+    private string BadgeClass => Signal!.Pending switch
+    {
+        TradeSide.Buy => "text-bg-success",
+        TradeSide.Sell => "text-bg-danger",
+        _ => "text-bg-secondary"
+    };
+
+    private string Detail => Signal!.Pending is not null ? "at next open"
+        : Signal.LastTradeDate is DateOnly d ? $"{(Signal.InPosition ? "bought" : "sold")} {d:d}"
+        : "no trades yet";
+
+    private string Tooltip
+    {
+        get
+        {
+            var s = Signal!;
+            var text = $"Score {s.Score:+0.00;-0.00;0.00} at the {s.SignalDate:d} close. " + (s.Pending switch
+            {
+                TradeSide.Buy => "The backtest would buy at the next open; this is a new Buy marker.",
+                TradeSide.Sell => "The backtest would sell at the next open; this is a new Sell marker.",
+                _ when s.InPosition => $"The backtest is holding until the score reaches -{SignalEngine.ActionThreshold:0.0}.",
+                _ => $"The backtest is out until the score reaches +{SignalEngine.ActionThreshold:0.0}.",
+            });
+            if (s.ProvisionalBar is DateOnly p)
+            {
+                text += $" The {p:d} bar is still forming and isn't used until it's final.";
+            }
+            return text;
+        }
+    }
+
+    // Your holding should match the backtest's position before the pending trade (owned before a Sell, not before a Buy).
+    private bool OutOfSync => Signal is not null && IsOwned != Signal.InPosition;
+
+    private string SyncTooltip => Signal!.InPosition
+        ? "The backtest is holding this stock, but you don't own it, so its next Sell marker won't apply to you. It won't signal a new Buy until after it sells."
+        : "You own this stock, but the backtest isn't holding it, so it won't signal a Sell until after its next Buy.";
+}
