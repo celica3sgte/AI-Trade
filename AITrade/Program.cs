@@ -28,6 +28,7 @@ var connectionString = builder.Configuration.GetConnectionString("DefaultConnect
 builder.Services.AddDbContextFactory<ApplicationDbContext>(options =>
     options.UseSqlServer(connectionString));
 builder.Services.AddScoped<WatchlistService>();
+builder.Services.AddScoped<SignalSettingsService>();
 
 builder.Services.Configure<AlpacaOptions>(builder.Configuration.GetSection(AlpacaOptions.SectionName));
 builder.Services.AddHttpClient<AlpacaClient>(client => client.Timeout = TimeSpan.FromSeconds(30));

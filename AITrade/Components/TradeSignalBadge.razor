@@ -53,8 +53,8 @@ else
             {
                 TradeSide.Buy => "The backtest would buy at the next open; this is a new Buy marker.",
                 TradeSide.Sell => "The backtest would sell at the next open; this is a new Sell marker.",
-                _ when s.InPosition => $"The backtest is holding until the score reaches -{SignalEngine.ActionThreshold:0.0}.",
-                _ => $"The backtest is out until the score reaches +{SignalEngine.ActionThreshold:0.0}.",
+                _ when s.InPosition => $"The backtest is holding until the score reaches -{s.Threshold:0.0}.",
+                _ => $"The backtest is out until the score reaches +{s.Threshold:0.0}.",
             });
             if (s.ProvisionalBar is DateOnly p)
             {

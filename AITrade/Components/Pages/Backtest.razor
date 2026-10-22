@@ -10,6 +10,7 @@
 @implements IAsyncDisposable
 
 @inject WatchlistService WatchlistService
+@inject SignalSettingsService SignalSettingsService
 @inject PriceDataService PriceDataService
 @inject IJSRuntime JS
 @inject ILogger<Backtest> Logger
@@ -29,7 +30,7 @@
                 <select id="threshold" class="form-select" @bind="threshold">
                     @foreach (var t in ThresholdOptions)
                     {
-                        <option value="@t">±@t.ToString("0.0")@(t == SignalEngine.ActionThreshold ? " (current)" : "")</option>
+                        <option value="@t">±@t.ToString("0.0")@(t == SignalEngine.ActionThreshold ? " (default)" : "")</option>
                     }
                 </select>
             </div>
@@ -53,7 +54,11 @@
             </div>
             <div class="col-sm-auto">
                 <button class="btn btn-primary" disabled="@(running || enabled.Count == 0 || chosenSymbols.Count == 0)" @onclick="RunAsync">@(running ? "Running..." : "Run backtest")</button>
+                <button type="button" class="btn btn-outline-secondary" disabled="@running" @onclick="ResetToDefaults" title="Restore the default settings (saved when you next run)">Defaults</button>
             </div>
+        </div>
+        <div class="form-text">
+            Running a backtest saves these settings. Signals on the Watchlist and stock pages use the score and strategies from your last run, so they match its chart.
         </div>
         @if (watchlistSymbols.Count > 0)
         {
@@ -240,6 +245,9 @@
     {
         try
         {
+            var saved = await SignalSettingsService.GetAsync(await GetUserIdAsync());
+            Apply(saved);
+
             watchlistSymbols = await LoadWatchlistSymbolsAsync();
             chosenSymbols.UnionWith(watchlistSymbols);
             if (watchlistSymbols.Count == 0)
@@ -254,11 +262,22 @@
         }
     }
 
-    private async Task<List<string>> LoadWatchlistSymbolsAsync()
+    private async Task<string> GetUserIdAsync() =>
+        (await AuthState).User.FindFirstValue(ClaimTypes.NameIdentifier)!;
+
+    private async Task<List<string>> LoadWatchlistSymbolsAsync() =>
+        (await WatchlistService.GetForUserAsync(await GetUserIdAsync())).Select(w => w.Symbol).ToList();
+
+    private void Apply(UserSignalSettings settings)
     {
-        var userId = (await AuthState).User.FindFirstValue(ClaimTypes.NameIdentifier)!;
-        return (await WatchlistService.GetForUserAsync(userId)).Select(w => w.Symbol).ToList();
+        threshold = settings.Signal.Threshold;
+        enabled.Clear();
+        enabled.UnionWith(settings.Signal.Enabled);
+        startingCash = settings.Backtest.StartingCash;
+        costBps = settings.Backtest.CostBps;
     }
+
+    private void ResetToDefaults() => Apply(UserSignalSettings.Default);
 
     private void ToggleSymbol(string symbol, bool on)
     {
@@ -303,6 +322,9 @@
             var histories = await PriceDataService.GetHistoriesAsync(symbols);
             var settings = new SignalSettings(threshold, enabled.ToHashSet());
             var options = new BacktestOptions(Math.Max(100, startingCash), Math.Clamp(costBps, 0, 500));
+
+            // Saved before running so the Watchlist matches this run's chart even if the user leaves mid-run.
+            await SignalSettingsService.SaveAsync(await GetUserIdAsync(), new(settings, options));
 
             results = [];
             skipped = [];

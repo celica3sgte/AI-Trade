@@ -9,6 +9,8 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
 
     public DbSet<DailyPrice> DailyPrices => Set<DailyPrice>();
 
+    public DbSet<SignalPreference> SignalPreferences => Set<SignalPreference>();
+
     protected override void OnModelCreating(ModelBuilder builder)
     {
         base.OnModelCreating(builder);
@@ -25,6 +27,14 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
         builder.Entity<DailyPrice>(entity =>
         {
             entity.HasKey(p => new { p.Symbol, p.Date });
+        });
+
+        builder.Entity<SignalPreference>(entity =>
+        {
+            entity.HasOne(p => p.User)
+                .WithOne()
+                .HasForeignKey<SignalPreference>(p => p.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

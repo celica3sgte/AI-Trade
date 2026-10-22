@@ -21,6 +21,7 @@ public sealed record EquityPoint(DateOnly Date, decimal Strategy, decimal BuyAnd
 /// <param name="Pending">Trade the latest signal triggers at the next open (a new marker), if any.</param>
 /// <param name="LastTradeDate">Date of the trade that set the current position; null if the backtest has never bought.</param>
 /// <param name="ProvisionalBar">Date of a newer, still-forming bar that was left out, if any.</param>
+/// <param name="Threshold">Score needed to trade under the settings used (buy at +Threshold, sell at -Threshold).</param>
 public sealed record TradeSignal(
     bool InPosition,
     TradeSide? Pending,
@@ -28,7 +29,8 @@ public sealed record TradeSignal(
     double Score,
     DateOnly SignalDate,
     DateOnly? ProvisionalBar,
-    bool IsStale);
+    bool IsStale,
+    double Threshold);
 
 /// <summary>
 /// How the walk-forward ML.NET forecasts compared with what actually happened over the forecast horizon.
@@ -231,13 +233,13 @@ public static class Backtester
         var isStale = today.DayNumber - signalDate.DayNumber > SignalEngine.StaleAfterDays;
         if (!traded)
         {
-            return new TradeSignal(false, null, null, latestScore, signalDate, provisional, isStale);
+            return new TradeSignal(false, null, null, latestScore, signalDate, provisional, isStale, settings.Threshold);
         }
 
         var isBuy = side == TradeSide.Buy;
         return runStart == last
-            ? new TradeSignal(!isBuy, side, null, latestScore, signalDate, provisional, isStale)
-            : new TradeSignal(isBuy, null, history[runStart + 1].Date, latestScore, signalDate, provisional, isStale);
+            ? new TradeSignal(!isBuy, side, null, latestScore, signalDate, provisional, isStale, settings.Threshold)
+            : new TradeSignal(isBuy, null, history[runStart + 1].Date, latestScore, signalDate, provisional, isStale, settings.Threshold);
     }
 
     private static ForecastAccuracy? MeasureForecasts(IndicatorSet ind, int start)

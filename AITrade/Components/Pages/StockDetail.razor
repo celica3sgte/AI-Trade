@@ -11,6 +11,7 @@
 
 @inject PriceDataService PriceDataService
 @inject WatchlistService WatchlistService
+@inject SignalSettingsService SignalSettingsService
 @inject IJSRuntime JS
 @inject ILogger<StockDetail> Logger
 
@@ -56,11 +57,11 @@ else
             <div class="card-body">
                 <div class="d-flex flex-wrap align-items-center gap-3 mb-2">
                     <h2 class="h5 mb-0">Signal</h2>
-                    <span class="fs-5"><RecommendationBadge Recommendation="recommendation" /></span>
+                    <span class="fs-5"><TradeSignalBadge Signal="tradeSignal" IsOwned="isOwned" /></span>
                     <span class="text-muted small">
                         Score @recommendation.Score.ToString("+0.00;-0.00;0.00") (range -1 to +1)
                         · @(isOwned ? "you own this stock" : "you don't own this stock")
-                        · as of @recommendation.AsOf.ToString("d")
+                        · as of the @recommendation.AsOf.ToString("d") close
                     </span>
                 </div>
                 <table class="table table-sm mb-2">
@@ -92,11 +93,12 @@ else
                     </tbody>
                 </table>
                 <p class="small text-muted mb-0">
-                    Each strategy votes +1, 0 or -1 and the score is the average.
-                    @(isOwned
-                        ? $"Buy more at +{SignalEngine.ActionThreshold:0.0} or higher, Sell at -{SignalEngine.ActionThreshold:0.0} or lower, otherwise Hold."
-                        : $"Buy at +{SignalEngine.ActionThreshold:0.0} or higher, otherwise Wait.")
-                    These rules haven't been backtested yet and are not financial advice.
+                    Each enabled strategy votes +1, 0 or -1 and the score is the average.
+                    The signal follows the <a href="backtest">Backtest</a> rules with the settings from your last run
+                    (score ±@signalSettings.Threshold.ToString("0.0"), @signalSettings.Enabled.Count of @(Enum.GetValues<Strategy>().Length) strategies; defaults until you run one):
+                    it buys when out and the score reaches +@signalSettings.Threshold.ToString("0.0"), and sells when holding and it reaches -@signalSettings.Threshold.ToString("0.0").
+                    Buy or Sell appears only on the day the backtest would place a new marker (trading at the next open); otherwise it shows Hold or Wait since its last trade.
+                    Only final daily closes are used. Past results don't guarantee future returns, and signals are not financial advice.
                 </p>
             </div>
         </div>
@@ -154,6 +156,8 @@ else
     private string normalizedSymbol = "";
     private string? companyName;
     private bool isOwned;
+    private SignalSettings signalSettings = SignalSettings.Default;
+    private TradeSignal? tradeSignal;
     private Recommendation? recommendation;
     private List<DailyPrice>? history;
     private DailyPrice? latest;
@@ -176,6 +180,9 @@ else
         var item = (await WatchlistService.GetForUserAsync(userId)).FirstOrDefault(w => w.Symbol == normalizedSymbol);
         companyName = item?.CompanyName;
         isOwned = item?.IsOwned ?? false;
+        signalSettings = (await SignalSettingsService.GetAsync(userId)).Signal;
+        tradeSignal = null;
+        recommendation = null;
 
         history = await PriceDataService.GetHistoryAsync(normalizedSymbol);
         if (history.Count == 0)
@@ -192,7 +199,16 @@ else
         }
 
         BuildIndicators(history);
-        recommendation = SignalEngine.Evaluate(history, isOwned, SignalEngine.MarketToday());
+
+        // Same rules and settings as the Watchlist, so the badge matches it and the backtest chart. The votes are for the
+        // same final bar the signal uses, not one still forming during market hours.
+        var today = SignalEngine.MarketToday();
+        var settings = signalSettings;
+        var finalBars = SignalEngine.IsFinal(history[^1]) ? history : history.GetRange(0, history.Count - 1);
+        // CPU-bound when the forecast votes (one ML.NET model per scanned day); keep it off the circuit's thread.
+        (tradeSignal, recommendation) = await Task.Run(() => (
+            Backtester.CurrentSignal(history, settings, today),
+            SignalEngine.Evaluate(finalBars, isOwned, today, settings)));
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)

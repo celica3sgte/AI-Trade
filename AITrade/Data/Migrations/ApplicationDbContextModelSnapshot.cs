@@ -131,6 +131,35 @@ namespace AITrade.Data.Migrations
                     b.ToTable("DailyPrices");
                 });
 
+            modelBuilder.Entity("AITrade.Data.SignalPreference", b =>
+                {
+                    b.Property<string>("UserId")
+                        .HasColumnType("nvarchar(450)");
+
+                    b.Property<decimal>("CostBps")
+                        .HasPrecision(9, 2)
+                        .HasColumnType("decimal(9,2)");
+
+                    b.Property<string>("EnabledStrategies")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<decimal>("StartingCash")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<double>("Threshold")
+                        .HasColumnType("float");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("UserId");
+
+                    b.ToTable("SignalPreferences");
+                });
+
             modelBuilder.Entity("AITrade.Data.WatchlistItem", b =>
                 {
                     b.Property<int>("Id")
@@ -327,6 +356,17 @@ namespace AITrade.Data.Migrations
                     b.HasKey("UserId", "LoginProvider", "Name");
 
                     b.ToTable("AspNetUserTokens", (string)null);
+                });
+
+            modelBuilder.Entity("AITrade.Data.SignalPreference", b =>
+                {
+                    b.HasOne("AITrade.Data.ApplicationUser", "User")
+                        .WithOne()
+                        .HasForeignKey("AITrade.Data.SignalPreference", "UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("AITrade.Data.WatchlistItem", b =>

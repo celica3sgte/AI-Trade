@@ -10,6 +10,7 @@
 @attribute [Authorize]
 
 @inject WatchlistService WatchlistService
+@inject SignalSettingsService SignalSettingsService
 @inject PriceDataService PriceDataService
 @inject ILogger<Watchlist> Logger
 
@@ -160,7 +161,8 @@ else
     <p class="small text-muted">
         Prices are daily closes from Alpaca, adjusted for splits and dividends, and are at least 15 minutes delayed.
         During market hours the latest value is the day's price so far.
-        Signals combine common technical strategies and an ML.NET price forecast, using the same rules and default settings as the <a href="backtest">Backtest</a> page:
+        Signals combine common technical strategies and an ML.NET price forecast, using the same rules and settings as your last <a href="backtest">Backtest</a> run
+        (score ±@signalSettings.Threshold.ToString("0.0"), @signalSettings.Enabled.Count of @(Enum.GetValues<Strategy>().Length) strategies; defaults until you run one):
         Buy or Sell appears only on the day the backtest would place a new marker (trading at the next open); otherwise it shows Hold or Wait since its last trade.
         Signals use final daily closes only, not a bar still forming during market hours. "Check" means your holding doesn't match the backtest's position.
         Past results don't guarantee future returns, and signals are not financial advice.
@@ -179,6 +181,7 @@ else
     private Dictionary<string, List<DailyPrice>> histories = new(StringComparer.OrdinalIgnoreCase);
     private Dictionary<string, PriceSummary> prices = new(StringComparer.OrdinalIgnoreCase);
     private Dictionary<string, TradeSignal> signals = new(StringComparer.OrdinalIgnoreCase);
+    private SignalSettings signalSettings = SignalSettings.Default;
     private string userId = default!;
     private string? message;
     private bool busy;
@@ -192,6 +195,7 @@ else
         var user = (await AuthState).User;
         userId = user.FindFirstValue(ClaimTypes.NameIdentifier)
             ?? throw new InvalidOperationException("Signed-in user has no identifier claim.");
+        signalSettings = (await SignalSettingsService.GetAsync(userId)).Signal;
         await LoadAsync();
     }
 
@@ -211,19 +215,20 @@ else
         await ComputeSignalsAsync();
     }
 
-    // Same rules and default settings as the backtest, so a Buy/Sell here is a new marker on its chart. Signals depend
-    // only on prices (holdings just drive the "Check" hint), so they're recomputed only when prices load.
+    // Same rules and settings as the user's last backtest run, so a Buy/Sell here is a new marker on its chart. Signals
+    // depend only on prices (holdings just drive the "Check" hint), so they're recomputed only when prices load.
     private async Task ComputeSignalsAsync()
     {
         var today = SignalEngine.MarketToday();
         var loaded = histories;
+        var settings = signalSettings;
         // CPU-bound when the forecast votes (one ML.NET model per scanned day); keep it off the circuit's thread.
         signals = await Task.Run(() =>
         {
             var result = new Dictionary<string, TradeSignal>(StringComparer.OrdinalIgnoreCase);
             foreach (var (symbol, history) in loaded)
             {
-                if (Backtester.CurrentSignal(history, SignalSettings.Default, today) is { } signal)
+                if (Backtester.CurrentSignal(history, settings, today) is { } signal)
                 {
                     result[symbol] = signal;
                 }
