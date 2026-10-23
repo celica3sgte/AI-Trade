@@ -82,6 +82,19 @@ public class PriceDataService(
             .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
     }
 
+    /// <summary>The most recent stored bar for each symbol; symbols with no stored prices are left out.</summary>
+    public async Task<List<DailyPrice>> GetLatestAsync(IEnumerable<string> symbols, CancellationToken ct = default)
+    {
+        var list = symbols.Select(WatchlistService.NormalizeSymbol).Distinct().ToList();
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        return await db.DailyPrices
+            .AsNoTracking()
+            .Where(p => list.Contains(p.Symbol))
+            .GroupBy(p => p.Symbol)
+            .Select(g => g.OrderByDescending(p => p.Date).First())
+            .ToListAsync(ct);
+    }
+
     private async Task SaveAsync(string[] symbols, Dictionary<string, List<AlpacaBar>> bars, DateOnly start, CancellationToken ct)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);

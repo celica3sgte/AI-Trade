@@ -25,14 +25,23 @@ builder.Services.AddAuthentication(options =>
 
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection") ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
 // The factory is for Blazor components/services; it also registers ApplicationDbContext as scoped for Identity.
+// Retries transient failures, such as Azure SQL resuming from auto-pause, a few times before giving up.
+// -2 is the client-side timeout seen while the database wakes; listing it is harmless if it's already treated as transient.
 builder.Services.AddDbContextFactory<ApplicationDbContext>(options =>
-    options.UseSqlServer(connectionString));
+    options.UseSqlServer(connectionString, sql => sql.EnableRetryOnFailure(
+        maxRetryCount: 3,
+        maxRetryDelay: TimeSpan.FromSeconds(10),
+        errorNumbersToAdd: [-2])));
 builder.Services.AddScoped<WatchlistService>();
 builder.Services.AddScoped<SignalSettingsService>();
 
 builder.Services.Configure<AlpacaOptions>(builder.Configuration.GetSection(AlpacaOptions.SectionName));
 builder.Services.AddHttpClient<AlpacaClient>(client => client.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddScoped<PriceDataService>();
+builder.Services.Configure<PriceRefreshOptions>(builder.Configuration.GetSection(PriceRefreshOptions.SectionName));
+builder.Services.AddHostedService<DailyPriceRefresher>();
+builder.Services.AddScoped<StockListService>();
+builder.Services.AddHostedService<StockListRefresher>();
 builder.Services.AddDatabaseDeveloperPageExceptionFilter();
 
 builder.Services.AddIdentityCore<ApplicationUser>(options =>

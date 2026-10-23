@@ -112,7 +112,7 @@ public static class SignalEngine
 
     // A daily bar is final once the 4 pm Eastern close is past the 15-minute data delay. Early-close days are
     // treated the same, which only means a bar fetched between the early close and 4:16 pm waits for a refresh.
-    private static readonly TimeOnly BarFinalAt = new(16, 16);
+    public static readonly TimeOnly BarFinalAt = new(16, 16);
 
     // Guards threshold comparisons against floating-point noise in averaged votes.
     private const double Epsilon = 1e-9;
@@ -120,7 +120,7 @@ public static class SignalEngine
     // The forecast votes only when it predicts at least this move over its horizon (1%).
     public const double ForecastMinMove = 0.01;
 
-    private static readonly TimeZoneInfo MarketTimeZone = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
+    public static readonly TimeZoneInfo MarketTimeZone =TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
 
     /// <summary>Today's date in US market (Eastern) time, matching how daily bars are dated.</summary>
     public static DateOnly MarketToday() =>

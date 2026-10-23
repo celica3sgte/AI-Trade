@@ -7,7 +7,8 @@ using Microsoft.Extensions.Options;
 namespace AITrade.Market;
 
 // Thin wrapper over the Alpaca REST APIs.
-// Docs: https://docs.alpaca.markets/us/reference/stockbars and https://docs.alpaca.markets/us/reference/get-v2-assets-symbol_or_asset_id
+// Docs: https://docs.alpaca.markets/us/reference/stockbars, https://docs.alpaca.markets/us/reference/get-v2-assets-symbol_or_asset_id
+// and https://docs.alpaca.markets/reference/get-v2-assets-1
 public partial class AlpacaClient(HttpClient http, IOptions<AlpacaOptions> options)
 {
     private static readonly TimeZoneInfo MarketTimeZone = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
@@ -28,6 +29,17 @@ public partial class AlpacaClient(HttpClient http, IOptions<AlpacaOptions> optio
 
         await EnsureSuccessAsync(response, ct);
         return await response.Content.ReadFromJsonAsync<AlpacaAsset>(ct);
+    }
+
+    /// <summary>Every active US equity Alpaca knows, tradable or not. The endpoint returns them all in one unpaginated response.</summary>
+    public async Task<List<AlpacaAsset>> GetActiveUsEquitiesAsync(CancellationToken ct = default)
+    {
+        var url = $"{ApiRoot(opts.TradingBaseUrl)}/v2/assets?status=active&asset_class=us_equity";
+        using var request = CreateRequest(url);
+        using var response = await http.SendAsync(request, ct);
+        await EnsureSuccessAsync(response, ct);
+        return await response.Content.ReadFromJsonAsync<List<AlpacaAsset>>(ct)
+            ?? throw new AlpacaApiException(response.StatusCode, "Empty response body.");
     }
 
     /// <summary>Gets split- and dividend-adjusted daily bars for the symbols, following pagination.</summary>

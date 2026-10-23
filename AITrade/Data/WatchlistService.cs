@@ -27,6 +27,13 @@ public class WatchlistService(IDbContextFactory<ApplicationDbContext> dbFactory,
             .ToListAsync();
     }
 
+    /// <summary>Every symbol on any user's watchlist, without duplicates.</summary>
+    public async Task<List<string>> GetAllSymbolsAsync(CancellationToken ct = default)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        return await db.WatchlistItems.Select(w => w.Symbol).Distinct().OrderBy(s => s).ToListAsync(ct);
+    }
+
     /// <summary>
     /// Verifies the symbol with Alpaca, then adds it. Throws if Alpaca can't be reached or isn't configured.
     /// </summary>

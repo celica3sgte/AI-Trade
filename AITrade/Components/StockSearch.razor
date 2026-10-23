@@ -1,0 +1,194 @@
+@using System.Diagnostics.CodeAnalysis
+@using AITrade.Data
+
+@inherits InputBase<string>
+
+@inject StockListService StockList
+@inject IJSRuntime JS
+@inject ILogger<StockSearch> Logger
+
+@* A symbol box that suggests stocks from the Stocks table as you type a symbol or company name. Typing a symbol
+   that isn't suggested still works, so the Watchlist can verify it with Alpaca as before. *@
+<div class="position-relative">
+    <input @ref="input" @attributes="AdditionalAttributes" class="@CssClass" type="text" autocomplete="off"
+           role="combobox" aria-autocomplete="list" aria-controls="@listId"
+           aria-expanded="@(open ? "true" : "false")"
+           aria-activedescendant="@(open && activeIndex >= 0 ? OptionId(activeIndex) : null)"
+           value="@text" @oninput="OnInputAsync" @onchange="OnChange" @onkeydown="OnKeyDown"
+           @onfocus="() => { open = results.Count > 0 || status is not null; }" @onblur="Close" />
+    @if (open && status is not null)
+    {
+        <div class="dropdown-menu show mt-1 w-100 shadow-sm" style="min-width: 22rem;">
+            <span class="dropdown-item-text small text-muted" role="status">@status</span>
+        </div>
+    }
+    else if (open)
+    {
+        <ul id="@listId" role="listbox" class="dropdown-menu show mt-1 w-100 shadow-sm" style="min-width: 22rem; max-height: 20rem; overflow-y: auto;">
+            @for (var i = 0; i < results.Count; i++)
+            {
+                var index = i;
+                var stock = results[i];
+                <li id="@OptionId(index)" role="option" aria-selected="@(index == activeIndex ? "true" : "false")">
+                    @* mousedown is cancelled so the box keeps focus (and the list stays open) until the click selects. *@
+                    <button type="button" tabindex="-1" class="dropdown-item @(index == activeIndex ? "active" : "")"
+                            @onmousedown:preventDefault @onclick="() => Select(stock)">
+                        <strong>@stock.Symbol</strong>
+                        @if (stock.Exchange is not null)
+                        {
+                            <span class="small opacity-75 ms-1">@stock.Exchange</span>
+                        }
+                        <div class="small text-truncate">@stock.Name</div>
+                    </button>
+                </li>
+            }
+        </ul>
+    }
+</div>
+
+@code {
+    private const int MaxResults = 10;
+
+    private readonly string listId = $"stock-search-{Guid.NewGuid():N}";
+    private ElementReference input;
+    private List<Stock> results = [];
+    private string text = "";
+    // Shown in place of suggestions when there are none, so an empty or unavailable list isn't silent.
+    private string? status;
+    private string? syncedValue;
+    private bool open;
+    private int activeIndex = -1;
+    private int searchVersion;
+
+    protected override void OnParametersSet()
+    {
+        base.OnParametersSet();
+        // Follow outside changes, e.g. the form clearing the symbol after an add.
+        if (CurrentValue != syncedValue)
+        {
+            syncedValue = CurrentValue;
+            text = CurrentValue ?? "";
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+        {
+            return;
+        }
+
+        try
+        {
+            await using var module = await JS.InvokeAsync<IJSObjectReference>("import", "./Components/StockSearch.razor.js");
+            await module.InvokeVoidAsync("init", input);
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (JSException ex)
+        {
+            // Suggestions still work; only Enter-to-pick falls back to submitting the form.
+            Logger.LogWarning(ex, "Couldn't load the stock search script");
+        }
+    }
+
+    private async Task OnInputAsync(ChangeEventArgs e)
+    {
+        // The bound value is only set on change (like InputText), so typing a company name doesn't flag the
+        // symbol as invalid mid-word.
+        text = e.Value?.ToString() ?? "";
+        activeIndex = -1;
+        var version = ++searchVersion;
+
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            results = [];
+            status = null;
+            open = false;
+            return;
+        }
+
+        List<Stock> found;
+        string? foundStatus = null;
+        try
+        {
+            found = await StockList.SearchAsync(text, MaxResults);
+            if (found.Count == 0)
+            {
+                foundStatus = await StockList.IsLoadedAsync()
+                    ? "No matching stocks."
+                    : "The stock list hasn't loaded from Alpaca yet. You can still type a symbol and click Add.";
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Stock search failed for {Query}", text);
+            found = [];
+            foundStatus = "Stock search isn't available right now. You can still type a symbol and click Add.";
+        }
+
+        // Ignore results for a query that's since been typed over.
+        if (version == searchVersion)
+        {
+            results = found;
+            status = foundStatus;
+            open = true;
+        }
+    }
+
+    private void OnChange(ChangeEventArgs e) => SetValue(e.Value?.ToString() ?? "");
+
+    private void OnKeyDown(KeyboardEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case "ArrowDown" when results.Count > 0:
+                open = true;
+                activeIndex = (activeIndex + 1) % results.Count;
+                break;
+            case "ArrowUp" when results.Count > 0:
+                open = true;
+                activeIndex = activeIndex <= 0 ? results.Count - 1 : activeIndex - 1;
+                break;
+            // StockSearch.razor.js stops this Enter from submitting the form.
+            case "Enter" when open && activeIndex >= 0 && activeIndex < results.Count:
+                Select(results[activeIndex]);
+                break;
+            case "Escape":
+                Close();
+                break;
+        }
+    }
+
+    private void Select(Stock stock)
+    {
+        ++searchVersion;
+        text = stock.Symbol;
+        results = [];
+        status = null;
+        Close();
+        SetValue(stock.Symbol);
+    }
+
+    private void SetValue(string value)
+    {
+        syncedValue = value;
+        CurrentValueAsString = value;
+    }
+
+    private void Close()
+    {
+        open = false;
+        activeIndex = -1;
+    }
+
+    private string OptionId(int index) => $"{listId}-{index}";
+
+    protected override bool TryParseValueFromString(string? value, [MaybeNullWhen(false)] out string result, [NotNullWhen(false)] out string? validationErrorMessage)
+    {
+        result = value ?? "";
+        validationErrorMessage = null;
+        return true;
+    }
+}

@@ -12,21 +12,28 @@
 @inject WatchlistService WatchlistService
 @inject SignalSettingsService SignalSettingsService
 @inject PriceDataService PriceDataService
+@inject StockListService StockListService
 @inject ILogger<Watchlist> Logger
 
 <PageTitle>Watchlist</PageTitle>
 
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h1 class="mb-0">Watchlist</h1>
-    <button class="btn btn-outline-primary" disabled="@(busy || items is not { Count: > 0 })" @onclick="RefreshPricesAsync">
-        @(refreshing ? "Refreshing..." : "Refresh prices")
-    </button>
+    <div class="d-flex gap-2">
+        <button class="btn btn-outline-secondary" disabled="@busy" @onclick="RefreshStockListAsync"
+                title="Re-download the list of stocks the symbol search suggests. It also refreshes daily on its own.">
+            @(refreshingStockList ? "Refreshing..." : "Refresh stock list")
+        </button>
+        <button class="btn btn-outline-primary" disabled="@(busy || items is not { Count: > 0 })" @onclick="RefreshPricesAsync">
+            @(refreshing ? "Refreshing..." : "Refresh prices")
+        </button>
+    </div>
 </div>
 
 <EditForm Model="Input" OnValidSubmit="AddAsync" FormName="add-watchlist" class="row g-2 align-items-start mb-4">
     <DataAnnotationsValidator />
-    <div class="col-sm-2">
-        <InputText @bind-Value="Input.Symbol" class="form-control" placeholder="Symbol (e.g. MSFT)" aria-label="Symbol" />
+    <div class="col-sm-3">
+        <StockSearch @bind-Value="Input.Symbol" class="form-control" placeholder="Search symbol or company" aria-label="Symbol" />
         <ValidationMessage For="() => Input.Symbol" class="text-danger" />
     </div>
     <div class="col-sm-2">
@@ -37,7 +44,7 @@
         <InputNumber @bind-Value="Input.AverageCostPerShare" class="form-control" min="0" step="any" placeholder="Avg cost / share" aria-label="Average cost per share" title="Average price paid per share in USD (only used if you own shares)" />
         <ValidationMessage For="() => Input.AverageCostPerShare" class="text-danger" />
     </div>
-    <div class="col-sm-4">
+    <div class="col-sm-3">
         <InputText @bind-Value="Input.Notes" class="form-control" placeholder="Notes (optional)" aria-label="Notes" />
         <ValidationMessage For="() => Input.Notes" class="text-danger" />
     </div>
@@ -49,6 +56,10 @@
 @if (message is not null)
 {
     <div class="alert alert-warning" role="alert">@message</div>
+}
+@if (notice is not null)
+{
+    <div class="alert alert-info" role="status">@notice</div>
 }
 
 @if (items is null)
@@ -184,8 +195,10 @@ else
     private SignalSettings signalSettings = SignalSettings.Default;
     private string userId = default!;
     private string? message;
+    private string? notice;
     private bool busy;
     private bool refreshing;
+    private bool refreshingStockList;
     private int? editingId;
     private decimal? editShares;
     private decimal? editCost;
@@ -240,7 +253,7 @@ else
     private async Task AddAsync()
     {
         busy = true;
-        message = null;
+        message = notice = null;
         try
         {
             AddWatchlistOutcome outcome;
@@ -294,7 +307,7 @@ else
         }
 
         busy = refreshing = true;
-        message = null;
+        message = notice = null;
         try
         {
             await PriceDataService.RefreshAsync(items.Select(i => i.Symbol));
@@ -311,9 +324,29 @@ else
         }
     }
 
+    private async Task RefreshStockListAsync()
+    {
+        busy = refreshingStockList = true;
+        message = notice = null;
+        try
+        {
+            var count = await StockListService.RefreshAsync();
+            notice = $"Stock list refreshed: {count:N0} stocks available in the symbol search.";
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Manual stock list refresh failed");
+            message = $"Couldn't refresh the stock list: {ex.Message}";
+        }
+        finally
+        {
+            busy = refreshingStockList = false;
+        }
+    }
+
     private void StartEdit(WatchlistItem item)
     {
-        message = null;
+        message = notice = null;
         editingId = item.Id;
         editShares = item.SharesOwned;
         editCost = item.AverageCostPerShare;
@@ -336,7 +369,7 @@ else
         }
 
         busy = true;
-        message = null;
+        message = notice = null;
         try
         {
             await WatchlistService.UpdateHoldingAsync(userId, item.Id, editShares.Value, editCost);
@@ -352,7 +385,7 @@ else
     private async Task RemoveAsync(WatchlistItem item)
     {
         busy = true;
-        message = null;
+        message = notice = null;
         try
         {
             await WatchlistService.RemoveAsync(userId, item.Id);

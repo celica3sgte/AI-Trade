@@ -11,6 +11,8 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
 
     public DbSet<SignalPreference> SignalPreferences => Set<SignalPreference>();
 
+    public DbSet<Stock> Stocks => Set<Stock>();
+
     protected override void OnModelCreating(ModelBuilder builder)
     {
         base.OnModelCreating(builder);

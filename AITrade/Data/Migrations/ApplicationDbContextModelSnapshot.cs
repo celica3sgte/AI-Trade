@@ -160,6 +160,29 @@ namespace AITrade.Data.Migrations
                     b.ToTable("SignalPreferences");
                 });
 
+            modelBuilder.Entity("AITrade.Data.Stock", b =>
+                {
+                    b.Property<string>("Symbol")
+                        .HasMaxLength(10)
+                        .HasColumnType("nvarchar(10)");
+
+                    b.Property<string>("Exchange")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<DateTime>("RefreshedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Symbol");
+
+                    b.ToTable("Stocks");
+                });
+
             modelBuilder.Entity("AITrade.Data.WatchlistItem", b =>
                 {
                     b.Property<int>("Id")
